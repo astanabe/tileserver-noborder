@@ -1,0 +1,40 @@
+License of the fetched data
+===========================
+
+This repository does NOT distribute the GeoJSON files in this directory.
+Operators fetch them at first-time setup directly from OpenStreetMap Japan
+(see README.md for the procedure).
+
+When an operator fetches them, the resulting files are licensed under BOTH
+of the following, simultaneously:
+
+  * Creative Commons Attribution-ShareAlike 2.0 Generic (CC-BY-SA 2.0)
+    https://creativecommons.org/licenses/by-sa/2.0/
+
+  * Open Database License (ODbL) 1.0
+    https://opendatacommons.org/licenses/odbl/1-0/
+
+Source:
+  Polygon coordinates extracted from OpenStreetMap Japan vector tilesets
+  `hoppo` and `takeshima`, served at https://tile.openstreetmap.jp/.
+
+  Per OSMFJ's site-wide license declaration
+  (https://www.openstreetmap.jp/terms_and_privacy):
+    - Tile data: CC-BY-SA 2.0
+    - Underlying OSM geographic data: ODbL 1.0
+                                      (© OpenStreetMap contributors)
+
+Required attribution if the operator redistributes the fetched files:
+
+    © OpenStreetMap contributors (ODbL).
+    Disputed-island polygons derived from OpenStreetMap Japan
+    (https://tile.openstreetmap.jp/, CC-BY-SA 2.0).
+
+Scope:
+  This LICENSE describes the license that applies to the fetched data IF
+  AND WHEN it is fetched per README.md. The repository itself remains
+  uniformly under GPL-2.0 (see the top-level LICENSE).
+
+  The CC-BY-SA 2.0 / ODbL share-alike obligation does NOT propagate into
+  the deployed MBTiles produced from these files; see README.md and
+  tileserver-noborder.md §13 for details.

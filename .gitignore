@@ -1,0 +1,13 @@
+# Island polygon snapshots fetched at first-time setup from OSM.jp.
+# These are CC-BY-SA 2.0 + ODbL — see geojson/README.md and geojson/LICENSE
+# for the license that applies to the fetched data.
+# Not distributed via this repository; users fetch them themselves.
+geojson/*.geojson
+
+# Python bytecode
+__pycache__/
+*.pyc
+
+# Editor / OS noise
+*.swp
+.DS_Store

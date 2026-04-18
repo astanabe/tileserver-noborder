@@ -1,0 +1,14 @@
+[Unit]
+Description=Rebuild Toner-en MBTiles
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=shimotsuki
+Group=shimotsuki
+ExecStart=/home/shimotsuki/tileserver-noborder/scripts/rebuild.sh
+TimeoutStartSec=12h
+Nice=10
+IOSchedulingClass=best-effort
+IOSchedulingPriority=7

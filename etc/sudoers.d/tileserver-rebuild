@@ -1,0 +1,5 @@
+# Privileges required by /home/shimotsuki/tileserver-noborder/scripts/rebuild.sh
+# (executed weekly by tileserver-rebuild.service as user shimotsuki).
+shimotsuki ALL=(root) NOPASSWD: /usr/bin/systemctl restart tileserver-gl.service
+shimotsuki ALL=(root) NOPASSWD: /usr/bin/systemctl reload  nginx.service
+shimotsuki ALL=(root) NOPASSWD: /usr/bin/find /var/cache/nginx/tiles -type f -delete

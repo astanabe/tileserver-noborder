@@ -1,0 +1,39 @@
+{
+  "options": {
+    "paths": {
+      "root": "/home/shimotsuki/tileserver-gl/data",
+      "fonts": "fonts",
+      "sprites": "sprites",
+      "styles": "styles",
+      "mbtiles": "."
+    },
+    "serveAllStyles": false,
+    "serveAllFonts": true,
+    "formatQuality": { "jpeg": 85, "webp": 90 }
+  },
+  "styles": {
+    "maptiler-toner-en": {
+      "style": "maptiler-toner-en/style.json",
+      "serve_rendered": false,
+      "serve_data": true,
+      "tilejson": {
+        "bounds": [-180, -85.0511, 180, 85.0511],
+        "attribution": "© OpenStreetMap contributors"
+      }
+    },
+    "maptiler-basic-en": {
+      "style": "maptiler-basic-en/style.json",
+      "serve_rendered": false,
+      "serve_data": true,
+      "tilejson": {
+        "bounds": [-180, -85.0511, 180, 85.0511],
+        "attribution": "© OpenStreetMap contributors"
+      }
+    }
+  },
+  "data": {
+    "openmaptiles": {
+      "mbtiles": "openmaptiles.mbtiles"
+    }
+  }
+}

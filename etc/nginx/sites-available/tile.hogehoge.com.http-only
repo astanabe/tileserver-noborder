@@ -1,0 +1,27 @@
+# Initial HTTP-only config for ACME http-01 challenge.
+# Replaced by tile.hogehoge.com after `certbot --nginx` succeeds.
+
+# --- Shared tile cache zone (declared at server-config scope; nginx hoists
+#     proxy_cache_path to the http{} block automatically) ---
+proxy_cache_path /var/cache/nginx/tiles
+    levels=1:2
+    keys_zone=tiles:100m
+    max_size=20g
+    inactive=7d
+    use_temp_path=off;
+
+# --- ACME challenge + redirect-to-HTTPS HTTP server ---
+server {
+    listen 80;
+    listen [::]:80;
+    server_name tile.hogehoge.com;
+
+    # certbot writes challenge files here
+    location /.well-known/acme-challenge/ {
+        root /home/shimotsuki/http/tile.hogehoge.com;
+    }
+
+    location / {
+        return 301 https://$host$request_uri;
+    }
+}

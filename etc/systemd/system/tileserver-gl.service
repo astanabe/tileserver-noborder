@@ -1,0 +1,16 @@
+[Unit]
+Description=tileserver-gl (Toner-en, Japanese territorial view)
+After=network.target
+
+[Service]
+Type=simple
+User=shimotsuki
+Group=shimotsuki
+WorkingDirectory=/home/shimotsuki/tileserver-gl/data
+ExecStart=/home/shimotsuki/tileserver-gl/node_modules/.bin/tileserver-gl --config /home/shimotsuki/tileserver-gl/data/config.json --bind 127.0.0.1 --port 8080
+Restart=on-failure
+RestartSec=5
+LimitNOFILE=65536
+
+[Install]
+WantedBy=multi-user.target

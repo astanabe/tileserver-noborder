@@ -1,0 +1,10 @@
+[Unit]
+Description=Weekly tile rebuild
+
+[Timer]
+OnCalendar=Sun 03:00 Asia/Tokyo
+Persistent=true
+RandomizedDelaySec=30m
+
+[Install]
+WantedBy=timers.target

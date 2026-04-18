@@ -1,0 +1,46 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<title>tile.hogehoge.com (Japanese territorial view)</title>
+<link href="https://unpkg.com/maplibre-gl@4/dist/maplibre-gl.css" rel="stylesheet" />
+<script src="https://unpkg.com/maplibre-gl@4/dist/maplibre-gl.js"></script>
+<style>
+  html, body { margin: 0; height: 100%; }
+  #map { position: absolute; top: 0; bottom: 0; left: 0; right: 0; }
+  #switcher {
+    position: absolute; top: 10px; right: 10px; z-index: 10;
+    background: rgba(255,255,255,0.95); padding: 8px 12px; border-radius: 4px;
+    box-shadow: 0 1px 4px rgba(0,0,0,0.3); font: 14px/1.4 sans-serif;
+  }
+  #switcher label { display: block; cursor: pointer; padding: 2px 0; }
+  #switcher input { margin-right: 6px; }
+</style>
+</head>
+<body>
+<div id="map"></div>
+<div id="switcher">
+  <strong>Style</strong>
+  <label><input type="radio" name="style" value="maptiler-toner-en" checked> Toner (B/W)</label>
+  <label><input type="radio" name="style" value="maptiler-basic-en"> Basic (Color)</label>
+</div>
+<script>
+  const BASE = 'https://tile.hogehoge.com/styles';
+  const map = new maplibregl.Map({
+    container: 'map',
+    style: `${BASE}/maptiler-toner-en/style.json`,
+    center: [146.2, 44.4],  // Northern Territories
+    zoom: 7,
+    hash: true
+  });
+  map.addControl(new maplibregl.NavigationControl());
+  map.addControl(new maplibregl.ScaleControl());
+
+  document.querySelectorAll('input[name=style]').forEach(el =>
+    el.addEventListener('change', e => {
+      map.setStyle(`${BASE}/${e.target.value}/style.json`);
+    })
+  );
+</script>
+</body>
+</html>
