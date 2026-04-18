@@ -7,20 +7,25 @@ The full build & operations spec is in **[`tileserver-noborder.md`](./tileserver
 ## Repository layout
 
 ```
-scripts/    Executable Python + Bash tools (fetch, buffer, patch, rebuild, mask).
-            scripts/fetch_osmjp.py is the only OSM.jp-touching tool — run
-            once at first-time setup and rarely thereafter.
-geojson/    Empty in the distribution — only README.md and LICENSE
-            are tracked. Operators fetch hoppo.geojson / takeshima.geojson
-            here at first-time setup via scripts/fetch_osmjp.py;
-            the data files are gitignored so they are never distributed.
-data/       tileserver-gl config.json
-etc/        systemd units, nginx site config, certbot deploy hook, sudoers entry
-            (mirrors the on-host /etc tree; install with `install` to deploy)
-web/        Demo HTML page served directly by nginx
+deploy.env.example  Per-deployment config template — copy to deploy.env and edit.
+deploy.env          Gitignored. Operator's actual values (USER_NAME, DOMAIN, etc.)
+staging/            Gitignored. Output of scripts/render-configs.sh — install
+                    commands in tileserver-noborder.md §9.x reference this tree.
+
+scripts/    Executable Python + Bash tools (fetch, buffer, patch, rebuild, mask,
+            render-configs). scripts/fetch_osmjp.py is the only OSM.jp-touching
+            tool — run once at first-time setup and rarely thereafter.
+geojson/    Tracked: README.md (fetch guide) + LICENSE (informational).
+            *.geojson are gitignored. Operators fetch hoppo.geojson /
+            takeshima.geojson here at first-time setup via scripts/fetch_osmjp.py;
+            the data files are never distributed via this repo.
+data/       Source-of-truth template for tileserver-gl config.json (default values).
+etc/        Source-of-truth templates for systemd units, nginx site config,
+            certbot deploy hook, sudoers entry. Mirrors deploy paths under /etc.
+web/        Source-of-truth template for the demo HTML page.
 ```
 
-Templated values inside the bundled files — domain `tile.hogehoge.com`, login user `shimotsuki`, build/serving paths under `/work/...` and `/home/shimotsuki/...` — are deliberate placeholders. Substitute them per deployment.
+Templated values inside the bundled files (`etc/`, `data/`, `web/`) — domain `tile.hogehoge.com`, login user `shimotsuki`, build/serving paths under `/work/...` and `/home/shimotsuki/...` — are placeholders that `scripts/render-configs.sh` substitutes with the operator's `deploy.env` values into `staging/` for installation.
 
 ## Pipeline
 

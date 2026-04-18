@@ -41,8 +41,8 @@ if __name__ == "__main__":
     ap = argparse.ArgumentParser()
     ap.add_argument("--inputs", nargs="+", required=True)
     ap.add_argument("--buffer-m", type=float, default=2000.0)
-    ap.add_argument("--out", default="/work/shimotsuki/planetiler/build/world_minus_islands.poly")
-    ap.add_argument("--debug", default="/work/shimotsuki/planetiler/build/islands_buffered.geojson")
+    ap.add_argument("--out",   required=True, help="Output .poly path (e.g. $BUILD_ROOT/build/world_minus_islands.poly)")
+    ap.add_argument("--debug", required=True, help="Output buffered-region GeoJSON path (e.g. $BUILD_ROOT/build/islands_buffered.geojson)")
     args = ap.parse_args()
 
     merged   = load_union(args.inputs)

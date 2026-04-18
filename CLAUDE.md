@@ -20,14 +20,20 @@ The doc references the bundled artifacts by repo path; it no longer embeds them.
 
 ```
 $REPO/
+├── deploy.env.example  Per-deployment config template (USER_NAME, DOMAIN, BUILD_ROOT, ...)
+├── deploy.env          gitignored, operator-edited copy of the above
+├── staging/            gitignored, output of scripts/render-configs.sh
+│                       (rendered etc/, data/, web/ with deploy.env values applied)
 ├── scripts/        Executable tools (Python + Bash). scripts/fetch_osmjp.py is the
 │                   only OSM.jp-touching tool — run once at first-time setup, rarely after.
+│                   scripts/render-configs.sh produces staging/ from etc/+data/+web/.
+│                   scripts/rebuild.sh sources deploy.env at runtime (no rendering needed).
 ├── geojson/        Tracked: only README.md (fetch guide) + LICENSE (informational).
 │                   Untracked: hoppo.geojson / takeshima.geojson — operators fetch these at
 │                   first-time setup; they are gitignored, never distributed via the repo.
-├── data/           tileserver-gl config (installed under /home/shimotsuki/tileserver-gl/data)
-├── etc/            Mirrors deploy paths under /etc — systemd / nginx / letsencrypt / sudoers.d
-└── web/            Static demo HTML (installed under /home/shimotsuki/http/tile.hogehoge.com)
+├── data/           Template for tileserver-gl config (rendered to staging/data/).
+├── etc/            Template tree mirroring deploy paths (rendered to staging/etc/).
+└── web/            Template for static demo HTML (rendered to staging/web/).
 ```
 
 The deployed system itself (PBF, generated MBTiles, tileserver-gl npm install, certificates, nginx caches) lives at external paths (`/work/shimotsuki/planetiler`, `/home/shimotsuki/tileserver-gl`, `/home/shimotsuki/http/tile.hogehoge.com`, `/etc/...`) — **not inside this repo**.
@@ -37,7 +43,8 @@ When the user asks to "run", "test", or "build" something, they probably mean ex
 ## Editing conventions
 
 - **Language inside `tileserver-noborder.md`: Japanese for prose, English for code.** Keep new narrative/explanatory text in Japanese to match the rest of the document. Code, identifiers, CLI flags, and **comments inside referenced scripts/configs** stay in English. (Other repo files — `CLAUDE.md`, `README.md`, and the contents of `scripts/`, `etc/`, `data/`, `web/` — are English-only; see the language policy at the top.)
-- **Placeholders are deliberate.** `tile.hogehoge.com` (domain), `shimotsuki` (login user), and the `/work/...` / `/home/shimotsuki/...` paths appear throughout — including inside the bundled config files. Treat them as template values; do not "fix" them to look more realistic. Per-deployment substitution is the operator's responsibility.
+- **Placeholders are deliberate.** `tile.hogehoge.com` (domain), `shimotsuki` (login user), and the `/work/...` / `/home/shimotsuki/...` paths appear throughout `etc/`, `data/`, `web/` — these are the **default values** that `scripts/render-configs.sh` substitutes via `deploy.env`. Edit `deploy.env` (gitignored) to change them, never the source files directly. Do not "fix" the source files to look more realistic.
+- **`deploy.env` is the single source of per-deployment truth.** All deployment-specific paths (USER_NAME, DOMAIN, BUILD_ROOT, TILESERVER_HOME/DATA, HTTP_ROOT, REPO) live there. `scripts/rebuild.sh` sources it at runtime; `scripts/render-configs.sh` reads it to produce `staging/`. Adding a new deployment-specific path means: (1) add it to `deploy.env.example`, (2) add a substitution rule in `render-configs.sh`, (3) reference it from the template files via the default value. Don't introduce alternative config mechanisms.
 - **Section numbering is load-bearing.** The doc cross-references sections heavily (e.g., "§1.2.4", "§9.3", "§10.2.1 (C)", "§12.1"). Renumbering or reordering sections requires updating every back-reference.
 - **Keep tools and the doc in sync.** When editing a `scripts/*.py` interface (CLI flags, output names, defaults), update the matching argument table or invocation example in `tileserver-noborder.md`. Same for any `etc/*` config — the doc's "what's in this file" prose summary should still be true.
 - **The `$REPO` env var is the contract.** The doc assumes `REPO=/home/shimotsuki/tileserver-noborder` (declared in §2.3). `scripts/rebuild.sh` and the `tileserver-rebuild.service` systemd unit also hardcode this default. If any of them change the convention, change all three together.

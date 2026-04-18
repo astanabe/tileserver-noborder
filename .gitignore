@@ -1,3 +1,10 @@
+# Per-deployment configuration (operator copies deploy.env.example, edits)
+deploy.env
+
+# Output of scripts/render-configs.sh (rendered etc/, data/, web/ files
+# with operator's deploy.env values substituted)
+staging/
+
 # Island polygon snapshots fetched at first-time setup from OSM.jp.
 # These are CC-BY-SA 2.0 + ODbL — see geojson/README.md and geojson/LICENSE
 # for the license that applies to the fetched data.
