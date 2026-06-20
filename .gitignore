@@ -15,6 +15,13 @@ geojson/*.geojson
 __pycache__/
 *.pyc
 
+# Python virtualenv for $REPO/scripts/*.py (created in §3 Step 0)
+venv/
+
+# Local logs / scratch (e.g. rebuild logs) — not part of the repo
+*.log
+log*.txt
+
 # Editor / OS noise
 *.swp
 .DS_Store

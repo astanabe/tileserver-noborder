@@ -18,7 +18,7 @@ server {
     server_name tile.hogehoge.com;
 
     location /.well-known/acme-challenge/ {
-        root /home/shimotsuki/http/tile.hogehoge.com;
+        root /home/foobar/http/tile.hogehoge.com;
     }
     location / {
         return 301 https://$host$request_uri;
@@ -27,9 +27,12 @@ server {
 
 # HTTPS reverse proxy in front of tileserver-gl
 server {
-    listen 443 ssl;
-    listen [::]:443 ssl;
-    http2 on;
+    # HTTP/2 is enabled via the listen-line `http2` option rather than the
+    # standalone `http2 on;` directive: the latter only exists in nginx >= 1.25.1,
+    # while Ubuntu 24.04 ships nginx 1.24.0. The listen-line form works on 1.24.0
+    # and still functions on newer nginx (with a deprecation warning).
+    listen 443 ssl http2;
+    listen [::]:443 ssl http2;
     server_name tile.hogehoge.com;
 
     ssl_certificate     /etc/letsencrypt/live/tile.hogehoge.com/fullchain.pem;
@@ -72,7 +75,7 @@ server {
 
     # Demo page (served directly by nginx, not proxied)
     location = /demo.html {
-        root /home/shimotsuki/http/tile.hogehoge.com;
+        root /home/foobar/http/tile.hogehoge.com;
     }
 
     # Everything else (admin UI, etc.)

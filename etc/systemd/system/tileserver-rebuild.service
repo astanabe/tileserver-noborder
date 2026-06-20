@@ -5,9 +5,9 @@ Wants=network-online.target
 
 [Service]
 Type=oneshot
-User=shimotsuki
-Group=shimotsuki
-ExecStart=/home/shimotsuki/tileserver-noborder/scripts/rebuild.sh
+User=foobar
+Group=foobar
+ExecStart=/home/foobar/tileserver-noborder/scripts/rebuild.sh
 TimeoutStartSec=12h
 Nice=10
 IOSchedulingClass=best-effort

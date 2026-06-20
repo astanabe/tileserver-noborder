@@ -1,7 +1,7 @@
 {
   "options": {
     "paths": {
-      "root": "/home/shimotsuki/tileserver-gl/data",
+      "root": "/home/foobar/tileserver-gl/data",
       "fonts": "fonts",
       "sprites": "sprites",
       "styles": "styles",
@@ -14,7 +14,7 @@
   "styles": {
     "maptiler-toner-en": {
       "style": "maptiler-toner-en/style.json",
-      "serve_rendered": false,
+      "serve_rendered": true,
       "serve_data": true,
       "tilejson": {
         "bounds": [-180, -85.0511, 180, 85.0511],
@@ -23,7 +23,7 @@
     },
     "maptiler-basic-en": {
       "style": "maptiler-basic-en/style.json",
-      "serve_rendered": false,
+      "serve_rendered": true,
       "serve_data": true,
       "tilejson": {
         "bounds": [-180, -85.0511, 180, 85.0511],

@@ -4,10 +4,16 @@ After=network.target
 
 [Service]
 Type=simple
-User=shimotsuki
-Group=shimotsuki
-WorkingDirectory=/home/shimotsuki/tileserver-gl/data
-ExecStart=/home/shimotsuki/tileserver-gl/node_modules/.bin/tileserver-gl --config /home/shimotsuki/tileserver-gl/data/config.json --bind 127.0.0.1 --port 8080
+User=foobar
+Group=foobar
+WorkingDirectory=/home/foobar/tileserver-gl/data
+# Raster rendering (serve_rendered: true) uses tileserver-gl's maplibre-gl-native
+# backend, whose prebuilt binary needs an X display + OpenGL (GLX). This host is
+# headless, so run under a virtual framebuffer (Xvfb) and force Mesa software
+# rendering. Requires the `xvfb` package (apt install xvfb). Without this, the
+# process aborts at startup with "Failed to open X display".
+Environment=LIBGL_ALWAYS_SOFTWARE=1
+ExecStart=/usr/bin/xvfb-run -a -s "-screen 0 1280x1024x24 -nolisten tcp" /home/foobar/tileserver-gl/node_modules/.bin/tileserver-gl --config /home/foobar/tileserver-gl/data/config.json --bind 127.0.0.1 --port 8080
 Restart=on-failure
 RestartSec=5
 LimitNOFILE=65536

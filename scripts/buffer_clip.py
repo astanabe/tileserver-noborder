@@ -1,18 +1,41 @@
 #!/usr/bin/env python3
-"""Geodesic-buffer the union of island GeoJSONs and emit an osmium .poly file.
+"""Build the disputed-area clip region and emit an osmium .poly file.
 
-The .poly defines the entire world as the outer ring and each buffered
-island as a hole, so `osmium extract -p` deletes everything within
-{buffer_m} meters of any island. Buffer is computed in an Azimuthal
-Equidistant projection centered on the geometry's centroid so the
-distance is metric-accurate at all latitudes.
+The region is the union of three optional sources:
+  --inputs   GeoJSON files, unioned. Used VERBATIM by default; a geodesic
+             buffer (Azimuthal Equidistant, metric-accurate at all latitudes)
+             is applied only when BUFFER_KM > 0 / --buffer-m > 0;
+  --bbox     lon/lat rectangles, taken verbatim (unbuffered);
+  --polygon  arbitrary lon/lat outlines, taken verbatim (unbuffered).
+
+Range expansion is therefore OFF by default everywhere. To buffer --inputs
+geometry, set BUFFER_KM to the desired distance in kilometres (e.g. BUFFER_KM=2).
+
+The deployment (rebuild.sh) now defines every area from explicit coordinates
+(--bbox / --polygon), so NO external GeoJSON is needed — the build has no
+OSM.jp dependency at all. --inputs is kept only for ad-hoc use.
+
+The .poly puts the whole world as the outer ring and each region as a hole,
+so `osmium extract -p` selects everything inside the regions. The companion
+GeoJSON (--debug) is the SAME region union, consumed by rebuild.sh §3.5/§3.6
+to strip labels inside it.
 
 See tileserver-noborder.md §6 for context.
 """
-import argparse, json
+import argparse, json, os
 from shapely.geometry import shape, box, Polygon, MultiPolygon, mapping
 from shapely.ops import transform, unary_union
 import pyproj
+
+# Default geodesic buffer for --inputs geometry, taken from the BUFFER_KM env
+# var (value is in KILOMETRES). BUFFER_KM=0 (the default) disables buffering
+# entirely — --inputs geometry is then used verbatim, like --bbox / --polygon.
+# Only the optional --inputs path is affected; --bbox / --polygon are never
+# buffered.
+try:
+    _DEF_BUFFER_M = float(os.environ.get("BUFFER_KM", "0")) * 1000.0
+except ValueError:
+    _DEF_BUFFER_M = 0.0
 
 def geodetic_buffer(geom, meters):
     cx, cy = geom.centroid.x, geom.centroid.y
@@ -39,22 +62,57 @@ def load_union(paths):
 
 if __name__ == "__main__":
     ap = argparse.ArgumentParser()
-    ap.add_argument("--inputs", nargs="+", required=True)
-    ap.add_argument("--buffer-m", type=float, default=2000.0)
+    ap.add_argument("--inputs", nargs="*", default=[],
+                    help="Optional input GeoJSON files (unioned, used verbatim unless "
+                         "a buffer is requested). Omit to define the region purely "
+                         "from --bbox / --polygon coordinates (no external GeoJSON).")
+    ap.add_argument("--buffer-m", type=float, default=_DEF_BUFFER_M,
+                    help="Geodesic buffer (METRES) applied to --inputs geometry only. "
+                         "Default comes from the BUFFER_KM env var (km*1000); "
+                         "0 = no buffer (verbatim). --bbox/--polygon are never buffered.")
+    ap.add_argument("--bbox", action="append", default=[], metavar="W,S,E,N",
+                    help="lon/lat rectangle (min_lon,min_lat,max_lon,max_lat), added "
+                         "UNBUFFERED (verbatim). Repeatable. E.g. Takeshima "
+                         "--bbox 131.84,37.22,131.89,37.26 ; Senkaku "
+                         "--bbox 123.29,25.59,123.77,26.02")
+    ap.add_argument("--polygon", action="append", default=[],
+                    metavar="lon,lat;lon,lat;...",
+                    help="Arbitrary lon/lat polygon (>=3 semicolon-separated "
+                         "'lon,lat' vertices), added UNBUFFERED (verbatim). "
+                         "Repeatable. E.g. the Northern Territories outline.")
     ap.add_argument("--out",   required=True, help="Output .poly path (e.g. $BUILD_ROOT/build/world_minus_islands.poly)")
-    ap.add_argument("--debug", required=True, help="Output buffered-region GeoJSON path (e.g. $BUILD_ROOT/build/islands_buffered.geojson)")
+    ap.add_argument("--debug", required=True, help="Output region GeoJSON path (e.g. $BUILD_ROOT/build/islands_buffered.geojson)")
     args = ap.parse_args()
 
-    merged   = load_union(args.inputs)
-    buffered = geodetic_buffer(merged, args.buffer_m).simplify(0.0002, preserve_topology=True)
+    # The strip region is the union of: buffered input GeoJSON (optional) +
+    # verbatim --bbox rectangles + verbatim --polygon outlines.
+    parts = []
+    if args.inputs:
+        merged = load_union(args.inputs)
+        if args.buffer_m > 0:                       # 0 (default) => verbatim, no expansion
+            merged = (geodetic_buffer(merged, args.buffer_m)
+                      .simplify(0.0002, preserve_topology=True))
+        parts.append(merged)
+    for b in args.bbox:
+        w, s, e, n = (float(v) for v in b.split(","))
+        parts.append(box(w, s, e, n))
+    for p in args.polygon:
+        pts = [tuple(float(v) for v in xy.split(",")) for xy in p.split(";") if xy]
+        poly = Polygon(pts)
+        if not poly.is_valid:
+            poly = poly.buffer(0)              # repair self-intersections
+        parts.append(poly)
+    if not parts:
+        ap.error("no region defined: pass at least one of --inputs / --bbox / --polygon")
+    region = unary_union(parts)
 
     with open(args.debug, "w") as fh:
         json.dump({"type":"FeatureCollection","features":[
-            {"type":"Feature","properties":{},"geometry":mapping(buffered)}
+            {"type":"Feature","properties":{},"geometry":mapping(region)}
         ]}, fh)
 
     world = box(-180.0, -89.9, 180.0, 89.9)
-    holes = [list(p.exterior.coords) for p in polys_of(buffered)]
+    holes = [list(p.exterior.coords) for p in polys_of(region)]
     outer = list(world.exterior.coords)
 
     with open(args.out, "w") as fh:

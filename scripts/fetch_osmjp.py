@@ -11,7 +11,10 @@ from shapely.geometry import shape, mapping
 from shapely.ops import unary_union
 
 def tile_to_wgs84(tile_bytes, z, x, y, layer_name):
-    dec = mapbox_vector_tile.decode(tile_bytes)
+    # y_coord_down=True puts MVT y origin at the top (spec-compliant); the
+    # library's default is origin-at-bottom, which would mirror polygons
+    # vertically within each tile.
+    dec = mapbox_vector_tile.decode(tile_bytes, default_options={"y_coord_down": True})
     if layer_name not in dec: return []
     layer = dec[layer_name]
     extent = layer.get("extent", 4096)

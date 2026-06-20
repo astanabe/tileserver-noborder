@@ -54,4 +54,4 @@ The deployed map's user-facing attribution does not need to credit OSMFJ. See `t
 
 ## Refresh cadence
 
-Disputed-island geometries change at year-scale at most, and any drift well under 2 km is absorbed by the geodesic buffer in `buffer_clip.py`. Refresh only when there is a confirmed upstream coastline correction. The weekly rebuild (`scripts/rebuild.sh`) does NOT re-fetch; it consumes whatever is in this directory.
+Disputed-island geometries change at year-scale at most, and any drift well under 2 km is absorbed by the geodesic buffer in `buffer_clip.py`. Refresh only when there is a confirmed upstream coastline correction. The yearly rebuild (`scripts/rebuild.sh`) does NOT re-fetch; it consumes whatever is in this directory.

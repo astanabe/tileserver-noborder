@@ -23,8 +23,10 @@ fi
 # shellcheck disable=SC1090
 . "$ENV_FILE"
 
-# Required vars
-: "${USER_NAME:?USER_NAME must be set in $ENV_FILE}"
+# USER_NAME defaults to the current login user (the repo / server are assumed
+# to run as the same user). Override in deploy.env only if they differ.
+: "${USER_NAME:=$(id -un)}"
+# DOMAIN has no sane auto-default; it must be set.
 : "${DOMAIN:?DOMAIN must be set in $ENV_FILE}"
 
 # Optional vars (resolve to defaults derived from required vars).
@@ -43,13 +45,13 @@ if [[ -n "${REPO:-}" && "$REPO" != "$(cd "$(dirname "$0")/.." && pwd)" ]]; then
 fi
 
 # Defaults baked into the source files (the strings to be replaced)
-DEF_USER="shimotsuki"
+DEF_USER="foobar"
 DEF_DOMAIN="tile.hogehoge.com"
-DEF_BUILD_ROOT="/work/shimotsuki/planetiler"
-DEF_TILESERVER_HOME="/home/shimotsuki/tileserver-gl"
-DEF_TILESERVER_DATA="/home/shimotsuki/tileserver-gl/data"
-DEF_HTTP_ROOT="/home/shimotsuki/http/tile.hogehoge.com"
-DEF_REPO="/home/shimotsuki/tileserver-noborder"
+DEF_BUILD_ROOT="/work/foobar/planetiler"
+DEF_TILESERVER_HOME="/home/foobar/tileserver-gl"
+DEF_TILESERVER_DATA="/home/foobar/tileserver-gl/data"
+DEF_HTTP_ROOT="/home/foobar/http/tile.hogehoge.com"
+DEF_REPO="/home/foobar/tileserver-noborder"
 
 # Reset staging/ for an idempotent render
 rm -rf "$STAGING"

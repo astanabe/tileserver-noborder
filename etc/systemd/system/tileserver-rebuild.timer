@@ -1,8 +1,8 @@
 [Unit]
-Description=Weekly tile rebuild
+Description=Yearly tile rebuild
 
 [Timer]
-OnCalendar=Sun 03:00 Asia/Tokyo
+OnCalendar=*-01-01 03:00 Asia/Tokyo
 Persistent=true
 RandomizedDelaySec=30m
 
