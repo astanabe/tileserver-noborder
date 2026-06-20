@@ -459,6 +459,60 @@ $EDITOR deploy.env
 
 > 既定値のまま render した場合は `staging/` 配下が `etc/`、`data/`、`web/` と完全一致する (no-op)。
 
+### 3.2 全環境変数一覧
+
+本構成で使う環境変数を用途別に整理する。**必須は `DOMAIN` と `ADMIN_EMAIL` のみ**で、他はすべて既定値を持つ。各変数は「設定箇所」の文脈で参照され、シェルや `deploy.env` で上書きできる。
+
+**(A) デプロイ設定 (`deploy.env`。詳細・ナラティブは §3.1)**
+
+| 変数 | 既定値 | 用途 |
+|---|---|---|
+| `USER_NAME` | `$(id -un)`(現在のログインユーザ) | systemd `User=`/`Group=`、sudoers、各 `/home/$USER_NAME/...` パス |
+| `DOMAIN` | **(必須)** | nginx `server_name`、Let's Encrypt パス、demo.html、nginx 設定ファイル名 |
+| `ADMIN_EMAIL` | **(必須)** | certbot の `-m`(本書コマンド例のみ。render 対象外) |
+| `BUILD_ROOT` | `/work/$USER_NAME/planetiler` | Planetiler ビルド作業ディレクトリ |
+| `TILESERVER_HOME` | `/home/$USER_NAME/tileserver-gl` | tileserver-gl の npm プロジェクトルート |
+| `TILESERVER_DATA` | `$TILESERVER_HOME/data` | tileserver-gl データディレクトリ |
+| `HTTP_ROOT` | `/home/$USER_NAME/http/$DOMAIN` | nginx 静的ルート (demo.html、ACME challenge) |
+| `PLANETILER_XMX` | `32736m` | Planetiler の Java ヒープ (`-Xms`/`-Xmx`。§8) |
+| `REPO` | `/home/$USER_NAME/tileserver-noborder` | systemd ユニットの ExecStart パス用(下記の「シェルの `$REPO`」と役割が異なる) |
+
+**(B) シェル / 共通**
+
+| 変数 | 既定値 | 設定箇所 | 用途 |
+|---|---|---|---|
+| `REPO` | (各シェルで `export` 要・§2.3) | 対話手順全般 | リポジトリのチェックアウト先。`. "$REPO/deploy.env"` 等が依存。`rebuild.sh` は自身の位置から自動算出 |
+| `ENV_FILE` | `$REPO/deploy.env` | `render-configs.sh` / `rebuild.sh` | source する設定ファイルのパス(別名運用時に上書き) |
+
+**(C) `scripts/rebuild.sh` の実行時オーバーライド**
+
+| 変数 | 既定値 | 用途 |
+|---|---|---|
+| `SKIP_PLANET_DOWNLOAD` | `0` | `1` で planet PBF の再ダウンロードを省略し、既存 `pbf/global.osm.pbf` で再ビルド (§11.1) |
+| `PLANET_URL` | `https://planet.passportcontrol.net/pbf/planet-latest.osm.pbf` | planet PBF 取得元(国内ミラー優先。§4) |
+| `PLANET_URL_FALLBACK` | `https://planet.openstreetmap.org/pbf/planet-latest.osm.pbf` | 上記が不通のときのフォールバック |
+| `PLANETILER_XMX` | `32736m` | (A) と同じ。`deploy.env` 由来 |
+
+**(D) `scripts/buffer_clip.py`**
+
+| 変数 | 既定値 | 用途 |
+|---|---|---|
+| `BUFFER_KM` | `0` | `--inputs` GeoJSON に適用する測地バッファ距離(**キロメートル**)。`0` で拡大なし(verbatim)。`--bbox`/`--polygon` には適用されない (§6) |
+
+**(E) `scripts/build_fonts.sh`**
+
+| 変数 | 既定値 | 用途 |
+|---|---|---|
+| `OUTPUT_DIR` | `$TILESERVER_DATA/fonts`(無ければ `$HOME/tileserver-gl/data/fonts`) | PBF font stack の出力先 |
+| `WORK` | `/tmp/tileserver-fonts-build` | フォントビルドの作業ディレクトリ |
+| `OMT_FONTS_REF` | `master` | 取得する `openmaptiles/fonts` の commit/tag |
+
+**(F) systemd ユニット内で設定 (操作者が触る必要は通常なし)**
+
+| 変数 | 値 | 設定箇所 | 用途 |
+|---|---|---|---|
+| `LIBGL_ALWAYS_SOFTWARE` | `1` | `tileserver-gl.service` の `Environment=` | Xvfb 下で Mesa ソフトウェア描画を強制(ラスター描画。§9.6) |
+
 ---
 
 ## 4. Step 1: OSM PBF の取得
