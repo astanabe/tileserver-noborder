@@ -997,6 +997,8 @@ install -m 0644 -o "$USER_NAME" -g "$USER_NAME" \
 
 tileserver-gl はループバック専用バインドとし、外部公開は後段の nginx に任せる (TLS 終端と CORS / キャッシュを nginx 側で一元管理するため)。
 
+> **`--public_url` 必須 (Host ヘッダ汚染対策)**: 本ユニットの `ExecStart` は `--public_url https://$DOMAIN/`（render で `deploy.env` の `DOMAIN` に置換）を渡す。これを付けないと tileserver-gl は `style.json` / TileJSON / sprite・glyph 参照に書き込む**絶対 URL をリクエストの `Host` / `X-Forwarded-Host` ヘッダから組み立てる**ため、生 IP への直接アクセス（あるいはヘッダ詐称）が来ると `https://<生IP>/data/...` を指す `style.json` が生成される。それをキャッシュしたブラウザは以後タイルを生 IP へ取りに行き、証明書 CN（`$DOMAIN`）と一致せず **`ERR_CERT_COMMON_NAME_INVALID`** で地図が出なくなる（ブラウザのサイトデータ削除で復旧するが再発する）。`--public_url` を付けると全 URL が常に正規ホスト名になり、tileserver-gl 起動時の `[SECURITY WARNING] Host header poisoning mitigation is NOT enabled` も消える。既に汚染 `style.json` が nginx / Cloudflare にキャッシュされている場合は §12 の手順で両方をパージすること。
+>
 > **Xvfb 前提 (`serve_rendered: true` のため)**: 本ユニットの `ExecStart` は `serve_rendered: true`（§9.5）のサーバ側ラスター描画に必要な X ディスプレイを与えるため、tileserver-gl を `xvfb-run` で起動する（`Environment=LIBGL_ALWAYS_SOFTWARE=1` で Mesa ソフトウェア描画を強制）。入れずに `serve_rendered: true` のまま起動すると `Failed to open X display` で異常終了する。
 >
 > ```bash

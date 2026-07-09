@@ -13,7 +13,15 @@ WorkingDirectory=/home/foobar/tileserver-gl/data
 # rendering. Requires the `xvfb` package (apt install xvfb). Without this, the
 # process aborts at startup with "Failed to open X display".
 Environment=LIBGL_ALWAYS_SOFTWARE=1
-ExecStart=/usr/bin/xvfb-run -a -s "-screen 0 1280x1024x24 -nolisten tcp" /home/foobar/tileserver-gl/node_modules/.bin/tileserver-gl --config /home/foobar/tileserver-gl/data/config.json --bind 127.0.0.1 --port 8080
+# --public_url pins the origin URLs that tileserver-gl writes into style.json,
+# TileJSON, sprite/glyph refs, etc. Without it, those absolute URLs are built
+# from the request Host / X-Forwarded-Host header, so a direct-IP hit (or a
+# spoofed header) makes tileserver emit e.g. https://<raw-ip>/data/... . A
+# browser that caches such a style then fetches tiles from the IP and fails TLS
+# with ERR_CERT_COMMON_NAME_INVALID. Pinning the public hostname (rendered from
+# deploy.env DOMAIN) makes every emitted URL canonical regardless of headers and
+# silences tileserver-gl's own "[SECURITY WARNING] Host header poisoning" notice.
+ExecStart=/usr/bin/xvfb-run -a -s "-screen 0 1280x1024x24 -nolisten tcp" /home/foobar/tileserver-gl/node_modules/.bin/tileserver-gl --config /home/foobar/tileserver-gl/data/config.json --public_url https://tile.hogehoge.com/ --bind 127.0.0.1 --port 8080
 Restart=on-failure
 RestartSec=5
 LimitNOFILE=65536

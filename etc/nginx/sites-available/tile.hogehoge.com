@@ -51,6 +51,13 @@ server {
 
     # Tiles, styles, sprites, fonts (cacheable)
     location ~* \.(pbf|mvt|png|jpg|jpeg|webp|json)$ {
+        # tileserver-gl already emits its own Access-Control-Allow-Origin: *.
+        # Drop it so nginx's add_header below is the only ACAO on the response;
+        # otherwise the client sees "Access-Control-Allow-Origin: *, *", which
+        # browsers reject (MultipleAllowOriginValues) and cross-origin fetch of
+        # vector tiles / style.json fails.
+        proxy_hide_header Access-Control-Allow-Origin;
+
         # CORS for browser MapLibre access
         add_header Access-Control-Allow-Origin  "*" always;
         add_header Access-Control-Allow-Methods "GET, OPTIONS" always;
@@ -64,6 +71,9 @@ server {
         proxy_set_header X-Forwarded-For   $proxy_add_x_forwarded_for;
 
         proxy_cache            tiles;
+        # Key by the client-facing $host (not the default upstream $proxy_host),
+        # so a request to the raw IP and one to $DOMAIN never share a cache entry.
+        proxy_cache_key        "$scheme$host$request_uri";
         proxy_cache_valid      200 7d;
         proxy_cache_valid      404 10m;
         proxy_cache_use_stale  error timeout updating http_500 http_502 http_503 http_504;
