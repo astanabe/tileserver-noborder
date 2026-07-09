@@ -5,9 +5,16 @@ Transforms applied (idempotent):
   - Remove OSM.jp runtime dependency (drop hoppo/takeshima sources + 5 layers)
   - Rewrite the openmaptiles source URL to reference a local mbtiles
   - Replace migu1c/migu2m fonts with Noto Sans Regular (latin-only render path)
-  - Normalize every text-field that references a name:* attribute to the
-    bare "{name:latin}" string, dropping any {name:nonlatin} companion so
-    labels render English-only (see tileserver-noborder.md §1.1, §8)
+  - Rewrite every text-field that references a name:* attribute to prefer the
+    English name, falling back to name:latin:
+        ["coalesce", ["get","name:en"], ["get","name:latin"]]
+    This fixes places whose default name is already Latin but differs from
+    English (Greenland: name="Kalaallit Nunaat", name:en="Greenland",
+    name:latin="Kalaallit Nunaat" — a bare {name:latin} would show the
+    Greenlandic name). Both branches are Latin-script, so no CJK/Cyrillic
+    glyphs re-enter the font stack, and there is deliberately no {name}
+    fallback (it could be non-Latin). Drops any {name:nonlatin} companion so
+    labels render English-only (see tileserver-noborder.md §1.1, §8).
   - Hide maritime boundaries (boundary.maritime=1) on every boundary layer
   - Mask over-water boundary lines by moving the water fill above the boundary
     layers, then lifting transportation back above it (catches maritime=0 strait
@@ -41,11 +48,20 @@ def walk_replace_font(obj, src, dst):
             walk_replace_font(x, src, dst)
 
 # =========================================================================
-# Normalize text-field to "{name:latin}" on any layer that references a
-# name:* attribute. Leaves non-name text-fields (e.g. "{housenumber}")
-# untouched. Idempotent: already-normalized values are not re-counted.
+# Rewrite text-field to prefer name:en, then name:latin, on any layer that
+# references a name:* attribute. Leaves non-name text-fields (e.g.
+# "{housenumber}") untouched. Idempotent: already-rewritten values are not
+# re-counted.
+#
+# name:latin is the latinization of the DEFAULT name; for a place whose
+# default name is already Latin script (Greenland = "Kalaallit Nunaat",
+# Germany = "Deutschland") planetiler keeps that name in name:latin and does
+# NOT substitute name:en. Preferring name:en fixes those; the name:latin
+# fallback still covers places transliterated from a non-Latin default
+# (Tokyo). No {name} fallback: it may be non-Latin and would reintroduce
+# glyphs the latin-only font stack does not carry.
 # =========================================================================
-NAME_LATIN_FIELD = "{name:latin}"
+ENGLISH_NAME_FIELD = ["coalesce", ["get", "name:en"], ["get", "name:latin"]]
 
 def _references_name(v):
     """True if the text-field value references any name:* attribute,
@@ -58,8 +74,8 @@ def normalize_text_field(obj):
     if isinstance(obj, dict):
         for k, v in obj.items():
             if k == "text-field":
-                if v != NAME_LATIN_FIELD and _references_name(v):
-                    obj[k] = NAME_LATIN_FIELD
+                if v != ENGLISH_NAME_FIELD and _references_name(v):
+                    obj[k] = copy.deepcopy(ENGLISH_NAME_FIELD)
                     count += 1
             else:
                 count += normalize_text_field(v)
@@ -271,12 +287,13 @@ def main(inp, outp, style_id, mbtiles_id):
     walk_replace_font(st, "migu1c-regular", "Noto Sans Regular")
     walk_replace_font(st, "migu2m-regular", "Noto Sans Regular")
 
-    # 4.5. [§1.1] Normalize text-field to "{name:latin}" only, dropping the
-    #      {name:nonlatin} companion that upstream styles include. This
-    #      enforces the English-only label design: labels appear only when
-    #      name:en (hence name:latin) exists; otherwise they are empty —
-    #      matching --transliterate=false's intent. Keeps CJK / Cyrillic
-    #      glyph requirements out of the font stack entirely.
+    # 4.5. [§1.1] Rewrite text-field to coalesce(name:en, name:latin),
+    #      dropping the {name:nonlatin} companion that upstream styles include.
+    #      Prefers the real English name over the latinized default name (so
+    #      Greenland renders "Greenland", not "Kalaallit Nunaat"), while still
+    #      rendering empty when neither Latin name exists — matching
+    #      --transliterate=false's intent and keeping CJK / Cyrillic glyph
+    #      requirements out of the font stack entirely.
     text_fields_normalized = normalize_text_field(st)
 
     # 5. [§1.2.1] Apply maritime!=1 guard to every boundary-layer-referencing
@@ -333,7 +350,7 @@ def main(inp, outp, style_id, mbtiles_id):
     print(f"  country-only layers removed      : {removed}")
     print(f"  sub-national layers merged       : {merged}")
     print(f"  country labels (maxzoom=5)       : {country_labels}")
-    print(f"  text-field normalized            : {text_fields_normalized}")
+    print(f"  text-field -> coalesce(en,latin) : {text_fields_normalized}")
     print(f"  water raised above boundaries    : {'moved' if water_moved else 'already above'}")
     print(f"  transportation lifted over mask  : {transport_lifted}")
 
