@@ -3,8 +3,8 @@
 #
 # NOTE: no proxy_cache_path here on purpose. This transient config only serves
 # the ACME challenge and the HTTP->HTTPS redirect; it never uses proxy_cache.
-# Declaring proxy_cache_path would make `nginx -t` (in 9.7.3) try to create
-# /var/cache/nginx/tiles, which does not exist until 9.7.5 creates it. The
+# Declaring proxy_cache_path would make `nginx -t` (in 8.7.3) try to create
+# /var/cache/nginx/tiles, which does not exist until 8.7.5 creates it. The
 # cache zone is declared in the full config (tile.hogehoge.com) instead.
 
 # --- ACME challenge + redirect-to-HTTPS HTTP server ---

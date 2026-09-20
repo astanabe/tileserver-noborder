@@ -2,7 +2,7 @@
 """List OSM element IDs whose direct tags produce labels / POIs.
 
 Input is an OPL dump (from `osmium cat -f opl`) of the residual inside the
-disputed-island buffer. Output is one element ID per line (e.g. ``w22880716``,
+disputed-island region. Output is one element ID per line (e.g. ``w22880716``,
 ``r7273565``), suitable for ``osmium removeid --id-file=-``.
 
 Unlike ``osmium tags-filter``, this does NOT include elements that are only
@@ -11,7 +11,7 @@ carry a label-producing tag are listed — so removing the output IDs won't
 break island-silhouette coastlines that happen to be members of a named
 archipelago multipolygon.
 
-See tileserver-noborder.md §7 for context.
+See tileserver-noborder.md §6 for context.
 """
 import argparse
 import re

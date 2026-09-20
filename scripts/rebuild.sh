@@ -7,7 +7,7 @@
 # repo is cloned. Privileged steps (systemctl restart, nginx cache purge)
 # are gated by /etc/sudoers.d/tileserver-rebuild.
 #
-# See tileserver-noborder.md §11 for context.
+# See tileserver-noborder.md §10 for context.
 set -euo pipefail
 
 REPO="${REPO:-$(cd "$(dirname "$0")/.." && pwd)}"
@@ -49,13 +49,12 @@ else
     cd "$BUILD_ROOT"
 fi
 
-# (2) Regenerate the .poly clip mask from EXPLICIT coordinates (no external
-#     GeoJSON — the build has no OSM.jp dependency). Disputed areas:
+# (2) Regenerate the .poly clip mask from lon/lat coordinates. Disputed areas:
 #       - Northern Territories: 8-point lon/lat polygon (covers Kunashir,
 #         Iturup, Shikotan, Habomai; excludes mainland Hokkaido / Nemuro).
 #       - Takeshima: lon/lat rectangle.
 #       - Senkaku Islands: lon/lat rectangle (Chinese-derived en label, §1.3).
-#     Source coords are lat,lon; passed here as lon,lat. All taken verbatim.
+#     Source coords are lat,lon; passed here as lon,lat.
 source "$REPO/venv/bin/activate"
 "$REPO/scripts/buffer_clip.py" \
     --polygon "146.10,44.90;145.26,43.85;145.51,43.49;145.83,43.41;145.88,43.32;146.59,43.14;149.60,45.19;148.70,46.10" \
@@ -74,7 +73,7 @@ osmium extract --overwrite \
 #       relation completion (e.g. Habomai archipelago multipolygon pulled in
 #       because sibling relations reference mainland Hokkaido features).
 #       natural=coastline silhouette ways are deliberately NOT in the list.
-#       See tileserver-noborder.md §7 / §7.1.
+#       See tileserver-noborder.md §6 / §6.1.
 osmium extract --overwrite --strategy=simple \
     -p build/islands_buffered.geojson \
     -o /tmp/resid.osm.pbf pbf/clipped.osm.pbf
@@ -86,11 +85,11 @@ if [[ -s /tmp/rm_ids.txt ]]; then
     mv pbf/clipped_final.osm.pbf pbf/clipped.osm.pbf
 fi
 
-# (3.6) Re-add the island-buffer geometry with all text stripped: islands keep
+# (3.6) Re-add the island-region geometry with all text stripped: islands keep
 #       their rivers/terrain/roads/buildings but render no labels. Steps (3)/(3.5)
 #       left `clipped` free of name-bearing island features, so this de-labeled
 #       copy is the sole label source; any duplicate is nameless geometry (e.g.
-#       coastline), so the merge is label-safe. See §1.3 / §7.2.
+#       coastline), so the merge is label-safe. See §1.3 / §6.2.
 osmium extract --overwrite --strategy=smart \
     -p build/islands_buffered.geojson \
     -o pbf/islands.osm.pbf pbf/global.osm.pbf
@@ -107,7 +106,7 @@ mv pbf/clipped_with_islands.osm.pbf pbf/clipped.osm.pbf
 # 32-bit object pointers stay enabled and remaining RAM is available as OS
 # page cache for mmap-backed storage. Override via PLANETILER_XMX in
 # deploy.env if the host has drastically different RAM (e.g. 100g on a
-# 128+ GB box using --storage=ram). See tileserver-noborder.md §8.
+# 128+ GB box using --storage=ram). See tileserver-noborder.md §7.
 : "${PLANETILER_XMX:=32736m}"
 java -Xms"$PLANETILER_XMX" -Xmx"$PLANETILER_XMX" -jar src/planetiler.jar \
     --osm_path=pbf/clipped.osm.pbf \

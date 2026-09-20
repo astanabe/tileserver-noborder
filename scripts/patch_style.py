@@ -1,10 +1,8 @@
 #!/usr/bin/env python3
-"""Patch an OSM.jp-derived MapLibre style for self-hosted, neutral rendering.
+"""Patch an upstream OpenMapTiles MapLibre style for self-hosted, neutral rendering.
 
 Transforms applied (idempotent):
-  - Remove OSM.jp runtime dependency (drop hoppo/takeshima sources + 5 layers)
   - Rewrite the openmaptiles source URL to reference a local mbtiles
-  - Replace migu1c/migu2m fonts with Noto Sans Regular (latin-only render path)
   - Rewrite every text-field that references a name:* attribute to prefer the
     English name, falling back to name:latin:
         ["coalesce", ["get","name:en"], ["get","name:latin"]]
@@ -14,7 +12,7 @@ Transforms applied (idempotent):
     Greenlandic name). Both branches are Latin-script, so no CJK/Cyrillic
     glyphs re-enter the font stack, and there is deliberately no {name}
     fallback (it could be non-Latin). Drops any {name:nonlatin} companion so
-    labels render English-only (see tileserver-noborder.md §1.1, §8).
+    labels render English-only (see tileserver-noborder.md §1.1, §7).
   - Hide maritime boundaries (boundary.maritime=1) on every boundary layer
   - Mask over-water boundary lines by moving the water fill above the boundary
     layers, then lifting transportation back above it (catches maritime=0 strait
@@ -26,26 +24,9 @@ Transforms applied (idempotent):
   - Point sprite/glyphs at tileserver-gl-local paths (kept domain-agnostic;
     tileserver-gl absolutizes them at serve time from the request host)
 
-See tileserver-noborder.md §1.2, §1.3, §9.3 for design rationale.
+See tileserver-noborder.md §1.2, §1.3, §8.3 for design rationale.
 """
 import json, argparse, copy
-
-# =========================================================================
-# Font replacement
-# =========================================================================
-def walk_replace_font(obj, src, dst):
-    if isinstance(obj, dict):
-        for k, v in obj.items():
-            if k == "text-font" and isinstance(v, list):
-                obj[k] = [dst if (isinstance(x,str) and x == src) else x for x in v]
-            elif k == "text-font" and isinstance(v, dict) and "stops" in v:
-                for s in v["stops"]:
-                    s[1] = [dst if (isinstance(x,str) and x == src) else x for x in s[1]]
-            else:
-                walk_replace_font(v, src, dst)
-    elif isinstance(obj, list):
-        for x in obj:
-            walk_replace_font(x, src, dst)
 
 # =========================================================================
 # Rewrite text-field to prefer name:en, then name:latin, on any layer that
@@ -271,23 +252,7 @@ def main(inp, outp, style_id, mbtiles_id):
         "url": f"mbtiles://{{{mbtiles_id}}}"
     }
 
-    # 2. Drop hoppo, takeshima sources
-    for s in ("hoppo", "takeshima"):
-        st["sources"].pop(s, None)
-
-    # 3. Drop layers that referenced the removed sources
-    drop_ids = {"island-hoppo","island-hoppo-name",
-                "island-takeshima","island-takeshima-name","island-takeshima-poi"}
-    drop_sources = {"hoppo","takeshima"}
-    st["layers"] = [l for l in st["layers"]
-                    if l.get("id") not in drop_ids
-                    and l.get("source") not in drop_sources]
-
-    # 4. Font replacement
-    walk_replace_font(st, "migu1c-regular", "Noto Sans Regular")
-    walk_replace_font(st, "migu2m-regular", "Noto Sans Regular")
-
-    # 4.5. [§1.1] Rewrite text-field to coalesce(name:en, name:latin),
+    # 2. [§1.1] Rewrite text-field to coalesce(name:en, name:latin),
     #      dropping the {name:nonlatin} companion that upstream styles include.
     #      Prefers the real English name over the latinized default name (so
     #      Greenland renders "Greenland", not "Kalaallit Nunaat"), while still
@@ -296,7 +261,7 @@ def main(inp, outp, style_id, mbtiles_id):
     #      requirements out of the font stack entirely.
     text_fields_normalized = normalize_text_field(st)
 
-    # 5. [§1.2.1] Apply maritime!=1 guard to every boundary-layer-referencing
+    # 3. [§1.2.1] Apply maritime!=1 guard to every boundary-layer-referencing
     #    layer. At this stage the dedicated admin_level=2 layers still exist
     #    and are also patched; they get removed by the next step.
     boundary_layers_patched = 0
@@ -305,18 +270,18 @@ def main(inp, outp, style_id, mbtiles_id):
             add_filter_clause(l, MARITIME_GUARD)
             boundary_layers_patched += 1
 
-    # 6. [§1.2.2-4] Country-border neutralization: (A) remove admin_country_* /
+    # 4. [§1.2.2-4] Country-border neutralization: (A) remove admin_country_* /
     #    boundary_country_*, (B) merge admin_level=2,3 into admin_sub /
     #    boundary_state (+ maritime guard), (C) cap country labels at maxzoom=5.
     removed, merged, country_labels = neutralize_country_boundaries(st)
 
-    # 6.5 [§1.2.5] Mask every over-water boundary line (maritime!=1 misses the
+    # 5. [§1.2.5] Mask every over-water boundary line (maritime!=1 misses the
     #     maritime=0 strait lines); keeps bridges/tunnels visible.
     water_moved, transport_lifted = mask_sea_boundaries(st)
 
-    # 7. Sprite/glyphs as tileserver-gl-local paths (domain stays out of the
+    # 6. Sprite/glyphs as tileserver-gl-local paths (domain stays out of the
     #    file; tileserver-gl absolutizes them at serve time from the request
-    #    Host/X-Forwarded-Proto, §13). sprite must be a non-http path or
+    #    Host/X-Forwarded-Proto, §12). sprite must be a non-http path or
     #    tileserver-gl 5.x won't serve it (/styles/<id>/sprite.* -> 400);
     #    "<id>/sprite" resolves under sprites/<id>/sprite.*.
     st["sprite"] = f"{style_id}/sprite"
@@ -328,7 +293,7 @@ def main(inp, outp, style_id, mbtiles_id):
     # Attribution per upstream LICENSE.md: Toner requires only "© MapTiler",
     # Basic requires "© OpenMapTiles"; both require "© OpenStreetMap
     # contributors" (ODbL). This project claims no copyright on its style
-    # modifications, so no extra credit is added (policy: §13.6).
+    # modifications, so no extra credit is added (policy: §12.4).
     st.setdefault("metadata", {})
     style_credit = (
         '<a href="https://www.maptiler.com/copyright/">&copy; MapTiler</a>'

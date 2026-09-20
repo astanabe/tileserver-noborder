@@ -3,7 +3,7 @@
 #
 # Reads $REPO/deploy.env and substitutes the operator's values into all
 # template files under etc/, data/, web/, writing the rendered output to
-# $REPO/staging/. Install commands in tileserver-noborder.md §9 reference
+# $REPO/staging/. Install commands in tileserver-noborder.md §8 reference
 # the staging tree (e.g. $REPO/staging/etc/systemd/system/...).
 #
 # Idempotent: clears staging/ before rendering. Safe to re-run after
@@ -108,5 +108,5 @@ Rendered $REPO/etc/, data/, web/ → $STAGING/
   HTTP_ROOT       = ${HTTP_ROOT}
   REPO (deployed) = ${REPO_DEPLOYED}
 
-Install from $STAGING/{etc,data,web}/... per tileserver-noborder.md §9.
+Install from $STAGING/{etc,data,web}/... per tileserver-noborder.md §8.
 EOF

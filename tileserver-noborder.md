@@ -1,12 +1,12 @@
-# 日本政府見解に準拠した独立型ベクタータイルサーバ構築手順 (Toner-en 版)
+# 日本政府見解に準拠した自前ベクタータイルサーバ構築手順
 
-OpenStreetMap.jp の **Toner-en / Basic-en スタイル**の視覚仕様を踏襲しつつ、**ビルド・配信・初回セットアップのいずれでも OSM.jp に一切依存しない**自前タイルサーバ(**ベクター + ラスター**)を **Ubuntu Server 24.04.4 LTS** に構築する手順。係争地の陸上境界は行政区画線と同一描画、海上境界線は非表示、北方領土・竹島・尖閣は地物を残しつつ文字情報を除去する。
+OpenMapTiles の **Maptiler Toner / Maptiler Basic スタイル**を境界線中立化して配信する自前タイルサーバ(**ベクター + ラスター**)を **Ubuntu Server 24.04 LTS または 26.04 LTS** に構築する手順。係争地の陸上境界は行政区画線と同一描画、海上境界線は非表示、北方領土・竹島・尖閣は地物を残しつつ文字情報を除去する。
 
 **前提条件:**
 
 | 項目 | 値 |
 |---|---|
-| OS | Ubuntu Server 24.04.4 LTS |
+| OS | Ubuntu Server 24.04 LTS (検証済) または 26.04 LTS |
 | ログインユーザ | `foobar` (sudo 権限あり) |
 | ビルド作業ディレクトリ | `/work/foobar/planetiler` |
 | tileserver-gl データディレクトリ | `/home/foobar/tileserver-gl/data` |
@@ -18,7 +18,18 @@ OpenStreetMap.jp の **Toner-en / Basic-en スタイル**の視覚仕様を踏�
 | リバースプロキシ | nginx (必須) |
 | SSL 証明書 | Let's Encrypt / apt の certbot + `python3-certbot-nginx` |
 
-> **ディレクトリ分離の意図**: `/work/foobar/planetiler` はビルド作業専用 (PBF、tmp、中間 MBTiles)。配信系は一切 `/work` を参照せず、`/home/foobar/tileserver-gl/data` と `/home/foobar/http/tile.hogehoge.com` のみで完結する。リビルド時はビルド成果物 (MBTiles) をクロスファイルシステム対応のアトミック置換で配信側に反映する (§11 参照)。
+> **OS バージョンについて**: 本書は Ubuntu Server **24.04.4 LTS** 上で全手順を検証した。**26.04 LTS** でもリポジトリ内のスクリプト・設定テンプレート・systemd / sudoers / certbot フックは変更なしで使えるが、OS 同梱パッケージの版数差により**手順の一部が分岐する**。分岐する箇所には本文中に `**[24.04]**` / `**[26.04]**` の見出しを付けてある。一覧:
+>
+> | 箇所 | 24.04 | 26.04 |
+> |---|---|---|
+> | §3 Node.js の導入元 | NodeSource `setup_22.x` (Node 20 は 2026-04 に EOL のため 22 を採用) | 同左。26.04 の標準リポジトリの `nodejs` が tileserver-gl の要件 (`node 20 \|\| 22 \|\| 24`) を満たすならそちらでも可 |
+> | §3 `canvas` のソース再ビルド | 必須 (システム libpng 1.6.43 ≠ prebuild 同梱 1.6.37) | 同じく必須 (システム libpng はさらに新しく、ミスマッチは解消しない)。venv の Python は 3.12 ではなく 26.04 標準の版になるが手順は同一 |
+> | §8.6 Mesa ソフト GL のパッケージ | `xvfb libgl1-mesa-dri` | `xvfb` + `libgl1-mesa-dri` が無い/transitional なら `libglx-mesa0 mesa-libgallium` を明示 |
+> | §8.7.5 nginx の HTTP/2 指定 | nginx 1.24.0 → `listen 443 ssl http2;` (テンプレート既定) | nginx 1.26 以降 → `http2 on;` に変換 (変換しなくても deprecated 警告が出るだけで動作する) |
+>
+> 上記以外 (apt パッケージ名、osmium-tool、OpenJDK 21、certbot、Python スクリプト、rebuild.sh) は両バージョンで同一。
+
+> **ディレクトリ分離の意図**: `/work/foobar/planetiler` はビルド作業専用 (PBF、tmp、中間 MBTiles)。配信系は一切 `/work` を参照せず、`/home/foobar/tileserver-gl/data` と `/home/foobar/http/tile.hogehoge.com` のみで完結する。リビルド時はビルド成果物 (MBTiles) をクロスファイルシステム対応のアトミック置換で配信側に反映する (§10 参照)。
 
 ---
 
@@ -26,14 +37,14 @@ OpenStreetMap.jp の **Toner-en / Basic-en スタイル**の視覚仕様を踏�
 
 ### 1.1 配信する 2 つのスタイル
 
-OSM.jp が提供する以下 2 スタイルを自前化し、**両方とも tile.hogehoge.com から配信**する。
+以下の 2 スタイルを **tile.hogehoge.com から配信**する。
 
 | スタイル | ベース配色 | 情報量 | 用途 |
 |---|---|---|---|
 | **Maptiler-Toner-en** | 白背景・黒描画の高コントラスト | 少 | 白黒印刷、データ可視化の背景、目に優しい下地 |
 | **Maptiler-Basic-en** | 水色・ベージュ・グレーのカラー | 多 | 一般用途、道路網・POI・細街路あり |
 
-両者ともテキスト要素は `["coalesce", ["get","name:en"], ["get","name:latin"]]` で統一され、ラベルは英語優先 (`name:en` を最優先、無ければ `name:latin`、どちらも無ければ空で描画されない、§8 参照)。
+両者ともテキスト要素は `["coalesce", ["get","name:en"], ["get","name:latin"]]` で統一され、ラベルは英語優先 (`name:en` を最優先、無ければ `name:latin`、どちらも無ければ空で描画されない、§7 参照)。
 
 ### 1.2 境界線と国名ラベルの扱い
 
@@ -59,9 +70,7 @@ OSM.jp が提供する以下 2 スタイルを自前化し、**両方とも tile
            └─ transportation              (橋・桟橋・フェリー・トンネルは海上でも可視)
 ```
 
-#### 1.2.1 海上国境線の非表示 (過渡段階)
-
-OSM.jp の 2 スタイルはいずれも**外部オーバレイ** (`hoppo` / `takeshima` vector タイル) に依存して、海上国境を白塗りで物理的に覆い隠す設計。本構成では OSM.jp ランタイム依存を排除したいため、別の手法が必要。
+#### 1.2.1 海上国境線の非表示 (maritime フィルター)
 
 両スタイルの色使いの違い:
 
@@ -75,7 +84,7 @@ Toner-en は **「水と国境線が同色 (黒) のため海上国境が自然�
 
 **採用する汎用解法**: OpenMapTiles スキーマの `boundary` レイヤーは `maritime` (0 or 1) フィールドを持ち、海上国境線は `maritime=1` でマークされる ([OpenMapTiles schema](https://openmaptiles.org/schema/))。これは planetiler-openmaptiles も同仕様で出力する。MapLibre style の `boundary` source-layer を参照する全レイヤーに `["!=", "maritime", 1]` フィルターを AND で追加する。
 
-> **この時点では過渡段階**: §1.2.2 で国境専用レイヤー (`admin_country_*` / `boundary_country_*`) 自体が削除されるため、それらにかけた maritime フィルターは結果的に不要となる。しかし処理順序としては「中立化前に boundary 全レイヤーへ一律ガード」→「中立化で一部削除・一部合流」という流れにすることで、合流時に既に maritime ガードが入っている状態を作り、§1.2.4 での重複チェックが不要になる (patch_style.py の `add_filter_clause()` は冪等)。
+> **処理順序について**: §1.2.2 で国境専用レイヤー (`admin_country_*` / `boundary_country_*`) 自体が削除されるため、それらにかけた maritime フィルターは結果的に不要となる。しかし処理順序としては「中立化前に boundary 全レイヤーへ一律ガード」→「中立化で一部削除・一部合流」という流れにすることで、合流時に既に maritime ガードが入っている状態を作り、§1.2.4 での重複チェックが不要になる (patch_style.py の `add_filter_clause()` は冪等)。
 
 #### 1.2.2 陸上国境線の「行政区画線」化
 
@@ -96,7 +105,7 @@ Toner-en は **「水と国境線が同色 (黒) のため海上国境が自然�
 
 | ズーム域 | 陸上国境線 (admin_level=2) | 県境/州界 (admin_level=4) | 国名ラベル |
 |---|---|---|---|
-| z0–4 | 非描画 (§1.2.2 で低ズーム用の国境レイヤー削除済み) | 元々描かれない | **表示** (世界地図に国名だけ) |
+| z0–4 | 非描画 (§1.2.2 で低ズーム用の国境レイヤー削除済み) | 描かれない (上流スタイルの仕様) | **表示** (世界地図に国名だけ) |
 | z5 以上 | **県境と同一スタイル**で描画 | 描画 | **非表示** |
 
 低ズームでは国名だけが浮かび「ここが日本、ここが中国」は分かる。拡大すると全ての境界が同じ破線で描かれ、国の形は図示されなくなる。
@@ -131,26 +140,25 @@ Toner-en は **「水と国境線が同色 (黒) のため海上国境が自然�
 
 ### 1.3 島内は「文字情報のみ除去」— 地物 (河川・地形等) は残す
 
-対象領域(北方領土・竹島の**陸地 + 2km バッファ**、および尖閣諸島の指定矩形 — §6 `--bbox`)内について、feature を削除するのではなく、**画面に描画される「文字」を生成するタグだけを剥がす**。具体的には `name` / `name:*` / `alt_name` 等の名称、route `ref` (路線番号シールド)、`addr:housenumber` (番地) を除去し、それ以外(ジオメトリと非文字タグ)はそのまま残す (`scripts/strip_island_labels.py`)。尖閣諸島を含めるのは、魚釣島等に中国語由来の英語表記が併記されるため。
+対象領域(北方領土の指定ポリゴン、竹島・尖閣諸島の指定矩形 — §5)内について、feature を削除するのではなく、**画面に描画される「文字」を生成するタグだけを剥がす**。具体的には `name` / `name:*` / `alt_name` 等の名称、route `ref` (路線番号シールド)、`addr:housenumber` (番地) を除去し、それ以外(ジオメトリと非文字タグ)はそのまま残す (`scripts/strip_island_labels.py`)。尖閣諸島を含めるのは、魚釣島等に中国語由来の英語表記が併記されるため。
 
 - 結果、島には**河川・湖沼・海岸線・土地被覆・道路・建物などの地物がそのまま描画され、地名・施設名・道路名・番地などのラベルは一切出ない**。
     - Toner-en: 海 (黒) の中に、無名だが河川・道路等のディテールを持つ島
     - Maptiler-Basic-en: 海 (水色) の中に、同様の無名ディテールを持つ島
-- **`--transliterate=false` (§8) との相乗**: `name:en` を持たない地物は元々ラベルが出ないため、明示的な除去が効くのは主に `name:en` を持つ地名 (集落名・島名等)。
+- **`--transliterate=false` (§7) との相乗**: `name:en` を持たない地物はそもそもラベルが出ないため、明示的な除去が効くのは主に `name:en` を持つ地名 (集落名・島名等)。
 - **境界線**: 島周辺の係争境界 way も geometry として残るが、§1.2 の中立化が適用される。海上の係争線・海峡線は §1.2.5 の water 被覆で非表示、陸上の境界は県境と同一スタイル (§1.2.2)。`maritime` フィルター (§1.2.1/§1.2.4) は `maritime=1` のみ。
 
-処理の流れ (§7.2): 島域を `osmium extract` で別 PBF に抽出 → OPL 経由で文字タグ除去 → `osmium merge` で本体に戻す。本体側 (`clipped`) は §7 / §7.1 の clip + 残渣除去で**名前付きの島内地物を既に除去済み**なので、ラベルの供給源は除去版だけになり、ラベル漏れは起きない。
+処理の流れ (§6.2): 島域を `osmium extract` で別 PBF に抽出 → OPL 経由で文字タグ除去 → `osmium merge` で本体に戻す。本体側 (`clipped`) は §6 / §6.1 の clip + 残渣除去で**名前付きの島内地物を既に除去済み**なので、ラベルの供給源は除去版だけになり、ラベル漏れは起きない。
 
-結論: **OSM.jp の `hoppo` / `takeshima` タイルは一切不要**。両スタイルから該当ソースとレイヤーを削除する。島は地物を残しつつ無名(河川・地形は見える)で描かれ、中立性は「名称・行政表記を出さない」ことで担保する。
+島は地物を残しつつ無名(河川・地形は見える)で描かれ、中立性は「名称・行政表記を出さない」ことで担保する。
 
-### 1.4 独立化のためのセットアップ時ダウンロード物と公開インフラ
+### 1.4 外部から取得するリソース
 
-セットアップ時のみ 1 度だけ外部から取得し、以降のタイル配信は完全ローカルで動作:
+外部から取得するリソースとその頻度:
 
 | リソース | 取得元 | 頻度 |
 |---|---|---|
 | 全球 OSM PBF | planet.passportcontrol.net (国内ミラー、優先) / planet.openstreetmap.org (フォールバック) | 初回 + 年次 (rebuild) |
-| 係争地の切り出し領域 (北方領土・竹島・尖閣) | **明示座標** (`scripts/rebuild.sh` 内にハードコード)。外部取得なし | (取得物ではない) |
 | Planetiler jar | GitHub Releases | 初回のみ |
 | 海岸線・水域ポリゴン、Natural Earth | Planetiler `--download` が自動取得 | 初回 + 年次 (rebuild) |
 | Maptiler-Toner style.json | [openmaptiles/maptiler-toner-gl-style](https://github.com/openmaptiles/maptiler-toner-gl-style) `v1.0` (BSD 3-Clause + CC-BY 4.0) | 初回のみ |
@@ -161,13 +169,9 @@ Toner-en は **「水と国境線が同色 (黒) のため海上国境が自然�
 | フォント build ツール (generate.js のみ) | [openmaptiles/fonts](https://github.com/openmaptiles/fonts) | 初回のみ |
 | SSL 証明書 | Let's Encrypt (ACME HTTP-01) | 初回 + 60 日ごとに自動更新 |
 
-> **OSM.jp 依存は完全にゼロ**:
-> - 係争地 (北方領土・竹島・尖閣) の切り出し領域は `scripts/rebuild.sh` 内の**明示座標** (`buffer_clip.py --polygon` / `--bbox`) で定義し、初回・年次ともに OSM.jp を一切叩かない。`fetch_osmjp.py` / `geojson/` は legacy (`buffer_clip.py --inputs` 用・§5)。
-> - OSM.jp の CC-BY-SA 2.0 由来データはビルドにも配信物にも入らない。ライセンスは §13 参照。
+係争地の切り出し領域 (北方領土・竹島・尖閣) は `scripts/rebuild.sh` 内の経緯度座標 (`buffer_clip.py --polygon` / `--bbox`) で定義し、取得物ではない (§5)。
 
-Let's Encrypt は**定常的な外部依存**となる (更新に 60 日周期の接続が必須) が、タイル配信自体は依然としてローカル完結。証明書を手動管理したい場合は `certbot certonly --manual` や私設 CA に切替可能。
-
-migu1c-regular / migu2m-regular は日本語専用フォントだが、両スタイルとも Latin 名 (`name:en` / `name:latin`) しか参照しないため日本語字形は描画されない。よってこれらの参照はスタイル改変で Noto Sans に差し替える。
+タイル配信自体は外部に接続しない。Let's Encrypt は証明書更新のため 60 日周期の接続が必要で、証明書を手動管理したい場合は `certbot certonly --manual` や私設 CA に切替可能。
 
 ### 1.5 公開構成
 
@@ -195,15 +199,15 @@ fonts/  (共通, 8 書体)
 ### 1.6 処理フロー
 
 ```
-[年次 rebuild ループ — OSM.jp は一切登場しない]
-係争地の明示座標 (rebuild.sh にハードコード)
+[年次 rebuild ループ]
+係争地の経緯度座標 (rebuild.sh に記載)
       │ buffer_clip.py --polygon/--bbox (世界外周 .poly + 領域 geojson)
       ▼
    world_minus_islands.poly  +  islands_buffered.geojson
       │
 [global.osm.pbf] ──┤ osmium extract -p          → clipped.osm.pbf (島域カット)
-                   │ 残渣 removeid (§3.5)        → 名前付き島内地物を除去
-                   │ 島抽出 → strip_island_labels.py (name/ref/番地除去) → merge (§3.6)
+                   │ 残渣 removeid (§6.1)        → 名前付き島内地物を除去
+                   │ 島抽出 → strip_island_labels.py (name/ref/番地除去) → merge (§6.2)
                    ▼
             [clipped.osm.pbf]  (島は地物そのまま・文字のみ無し)
                    │ Planetiler (OpenMapTiles profile, --languages=en, --transliterate=false)
@@ -213,8 +217,6 @@ fonts/  (共通, 8 書体)
             tileserver-gl (serve_rendered:true) + 改変 Toner-en/Basic-en スタイル
                    │
             nginx (TLS, proxy_cache, CORS) → Cloudflare
-
-# 係争地は座標で定義。fetch_osmjp.py / geojson/ は legacy(§5)。
 ```
 
 ---
@@ -235,7 +237,7 @@ fonts/  (共通, 8 書体)
 
 | 種別 | 項目 | サイズ |
 |---|---|---:|
-| 恒久 | OS (Ubuntu 24.04) + 依存パッケージ | ~8 GB |
+| 恒久 | OS (Ubuntu 24.04 / 26.04) + 依存パッケージ | ~8 GB |
 | 恒久 | Planetiler jar / tileserver-gl (`node_modules`) / Python venv | ~1 GB |
 | 恒久 | Toner-en 資産 (style, sprite, fonts) | ~100 MB |
 | サイクル毎 | ソース PBF (`planet.osm.pbf`) | ~85 GB |
@@ -261,11 +263,11 @@ fonts/  (共通, 8 書体)
 
 ### 2.2 ディレクトリ
 
-ログインユーザ `foobar` が全ての作業を実施する前提。ビルド作業用 (`/work/foobar/planetiler`) と、配信データ用 (`/home/foobar/tileserver-gl/data`)、nginx 静的ルート用 (`/home/foobar/http/tile.hogehoge.com`) の 3 ツリーを用意する。スクリプト本体は本リポジトリに集約済み (§2.3) のため、`/work/.../scripts` は作成しない。
+ログインユーザ `foobar` が全ての作業を実施する前提。ビルド作業用 (`/work/foobar/planetiler`) と、配信データ用 (`/home/foobar/tileserver-gl/data`)、nginx 静的ルート用 (`/home/foobar/http/tile.hogehoge.com`) の 3 ツリーを用意する。スクリプトは本リポジトリ (§2.3) から直接実行する。
 
 ```bash
 # ビルド作業用 (大容量 SSD を想定)
-sudo mkdir -p /work/$USER/planetiler/{src,pbf,geojson,mbtiles,build}
+sudo mkdir -p /work/$USER/planetiler/{src,pbf,mbtiles,build}
 sudo chown -R $USER:$USER /work/$USER
 
 # tileserver-gl の配信データ用 (両スタイル分の styles/sprites サブディレクトリ)
@@ -280,7 +282,7 @@ mkdir -p $HOME/http/tile.hogehoge.com
 cd /work/$USER/planetiler
 ```
 
-> **このブロックは clone 前**: まだ `deploy.env` を source できないため、`$HOME` / `$USER`(=ログインユーザ)でパスを組み立てている。リポジトリとサーバを同一ユーザで運用する前提なので、これで実ユーザのホーム配下に正しく作られる。ビルド作業ディレクトリだけは `/work/$USER/planetiler` を既定とするが、別ボリューム構成で `deploy.env` の `BUILD_ROOT` を変える場合はそのパスに読み替えること。静的ルート (`$HOME/http/<DOMAIN>`) のディレクトリ名は `$DOMAIN` と一致させる必要があり、§9 以降のインストール手順は `deploy.env` を source して `$HTTP_ROOT` 等を使う。
+> **このブロックは clone 前**: まだ `deploy.env` を source できないため、`$HOME` / `$USER`(=ログインユーザ)でパスを組み立てている。リポジトリとサーバを同一ユーザで運用する前提なので、これで実ユーザのホーム配下に正しく作られる。ビルド作業ディレクトリだけは `/work/$USER/planetiler` を既定とするが、別ボリューム構成で `deploy.env` の `BUILD_ROOT` を変える場合はそのパスに読み替えること。静的ルート (`$HOME/http/<DOMAIN>`) のディレクトリ名は `$DOMAIN` と一致させる必要があり、§8 以降のインストール手順は `deploy.env` を source して `$HTTP_ROOT` 等を使う。
 
 ### 2.3 本リポジトリの配置と `$REPO` 変数
 
@@ -300,7 +302,7 @@ export REPO=$HOME/tileserver-noborder
 echo "export REPO=$REPO" >> ~/.bashrc
 ```
 
-> **重要 — `$REPO` は各シェルで必要**: §9.x / §10.x の多くのブロックは冒頭で `. "$REPO/deploy.env"` を実行して `$DOMAIN` 等を読み込む。`$REPO` が未設定のシェル (= clone 後に開き直した端末、SSH 再接続、`tmux`/`screen` の別ペイン等) でこれらを実行すると、`. "$REPO/deploy.env"` が `. "/deploy.env"` に展開されて失敗し、以降の `$DOMAIN` 等がすべて空になる。**作業を再開するシェルでは必ず最初に `export REPO=...` を実行する** (上記のように `~/.bashrc` に書いておけば自動化される)。
+> **重要 — `$REPO` は各シェルで必要**: §8.x / §9.x の多くのブロックは冒頭で `. "$REPO/deploy.env"` を実行して `$DOMAIN` 等を読み込む。`$REPO` が未設定のシェル (= clone 後に開き直した端末、SSH 再接続、`tmux`/`screen` の別ペイン等) でこれらを実行すると、`. "$REPO/deploy.env"` が `. "/deploy.env"` に展開されて失敗し、以降の `$DOMAIN` 等がすべて空になる。**作業を再開するシェルでは必ず最初に `export REPO=...` を実行する** (上記のように `~/.bashrc` に書いておけば自動化される)。
 >
 > なお `deploy.env` 自身も末尾で `REPO=...` を定義しているが (§3.1)、これは `scripts/render-configs.sh` と systemd ユニットの `ExecStart` 用であって、**シェルの `$REPO` を肩代わりするものではない** — `deploy.env` を source するにはその前に `$REPO` でその場所を特定できている必要があるため (鶏と卵)。対話手順では上記の `export REPO=...` が起点となる。
 
@@ -313,32 +315,26 @@ $REPO/
 ├── staging/                       gitignored; output of scripts/render-configs.sh
 │   └── {etc,data,web}/...         rendered with operator's values, ready to install
 ├── scripts/                       # Executable tools (Python / Bash)
-│   ├── fetch_osmjp.py             § 5 (initial setup + rare refresh; only OSM.jp-touching tool)
-│   ├── buffer_clip.py             § 6
-│   ├── verify_buffer.py           § 6
-│   ├── residual_label_ids.py      § 7 / § 7.1 (post-clip residual inspection)
-│   ├── build_fonts.sh             § 9.2 (google/fonts → instance → PBF)
-│   ├── patch_style.py             § 9.3
-│   ├── apply_sea_mask.py          § 12.1
+│   ├── buffer_clip.py             § 5
+│   ├── residual_label_ids.py      § 6 / § 6.1 (post-clip residual inspection)
+│   ├── strip_island_labels.py     § 6.2
+│   ├── build_fonts.sh             § 8.2 (google/fonts → instance → PBF)
+│   ├── patch_style.py             § 8.3
+│   ├── apply_sea_mask.py          § 11.1
 │   ├── render-configs.sh          § 3.1; renders etc/, data/, web/ → staging/
-│   └── rebuild.sh                 § 11; sources deploy.env at runtime
-├── geojson/                       # § 5; tracked: README.md + LICENSE.
-│   │                              #       *.geojson are gitignored
-│   │                              #       (operator fetches them via scripts/fetch_osmjp.py)
-│   ├── README.md
-│   └── LICENSE
+│   └── rebuild.sh                 § 10; sources deploy.env at runtime
 ├── data/tileserver-gl/            # source-of-truth template (default values)
-│   └── config.json                § 9.5
+│   └── config.json                § 8.5
 ├── etc/                           # source-of-truth template (default values)
 │   ├── systemd/system/*.service / *.timer
 │   ├── nginx/sites-available/tile.hogehoge.com{,.http-only}
 │   ├── letsencrypt/renewal-hooks/deploy/reload-nginx.sh
 │   └── sudoers.d/tileserver-rebuild
 └── web/
-    └── demo.html                  § 10.3
+    └── demo.html                  § 9.3
 ```
 
-スクリプトは `$REPO/scripts/` から直接実行する (インストール不要)。配信側の設定ファイル (etc/、data/、web/) は **`scripts/render-configs.sh` で `staging/` に展開してから** `sudo install` で所定のパスに配置する (詳細は §3.1 と §9.x)。
+スクリプトは `$REPO/scripts/` から直接実行する (インストール不要)。配信側の設定ファイル (etc/、data/、web/) は **`scripts/render-configs.sh` で `staging/` に展開してから** `sudo install` で所定のパスに配置する (詳細は §3.1 と §8.x)。
 
 > **プレースホルダ**: `etc/`、`data/`、`web/` 以下のファイルにはデフォルト値 (`tile.hogehoge.com`、`foobar`、`/work/foobar/planetiler` 等) が直書きされているが、これらは「テンプレート値」であって render プロセスで置換される。手動で `sed` する必要はない。
 
@@ -357,19 +353,24 @@ sudo apt install -y \
     libgif-dev librsvg2-dev libpixman-1-dev \
     libopengl0           # tileserver-gl (@maplibre/maplibre-gl-native) の実行時に必要
 
-# Node.js LTS
-curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash -
+# Node.js LTS (tileserver-gl 5.x requires node 20 || 22 || 24; Node 20 reached
+# EOL in 2026-04, so use 22 or newer)
+#   [24.04] The archive nodejs (18.x) is too old -> NodeSource is required.
+#   [26.04] NodeSource works as well. Alternatively, the archive nodejs may be
+#           used if `apt-cache policy nodejs` shows a version >= 22 (skip the
+#           curl line and just `sudo apt install -y nodejs npm`).
+curl -fsSL https://deb.nodesource.com/setup_22.x | sudo -E bash -
 sudo apt install -y nodejs
+node --version   # -> v22.x (or newer)
 
 # Python venv for $REPO/scripts/*.py
 #   - shapely + pyproj   → buffer_clip.py (年次 rebuild ループに必要)
-#   - requests, mercantile, mapbox-vector-tile → fetch_osmjp.py (初回セットアップ時のみ、§5)
+#   - fonttools          → build_fonts.sh (§8.2 が未導入なら自動インストール)
 # スクリプトと同じリポジトリ配下に置く ($REPO/venv/)。gitignore 済み。
 python3 -m venv "$REPO/venv"
 source "$REPO/venv/bin/activate"
 pip install --upgrade pip
 pip install shapely pyproj
-pip install requests mercantile mapbox-vector-tile
 
 # Planetiler
 cd /work/$USER/planetiler/src
@@ -384,12 +385,15 @@ npm install tileserver-gl
 # ディスク小 / PNG レンダリング不要ならこちらでも可:
 #   npm install tileserver-gl-light
 
-# canvas の prebuild バイナリは自前の libpng 1.6.37 を同梱しており、
-# Ubuntu 24.04 のシステム libpng 1.6.43 とミスマッチを起こして
-# tileserver-gl 起動時に "libpng version mismatch" で abort する。
-# ソースから再ビルドしてシステム libpng へリンクさせる。
-# 上で $REPO/venv を activate しているため、node-gyp が venv の
-# Python 3.12 を拾い distutils 削除にぶつかる。system python3 を明示する。
+# The canvas prebuild binary bundles its own libpng 1.6.37, which mismatches
+# the system libpng and makes tileserver-gl abort at startup with
+# "libpng version mismatch". Rebuild from source so it links the system libpng.
+#   [24.04] system libpng 1.6.43 -> mismatch, rebuild required.
+#   [26.04] system libpng is newer still -> mismatch persists, rebuild required.
+#           (check with: dpkg -l 'libpng16*' | grep ^ii)
+# $REPO/venv is activated above, so node-gyp would pick up the venv Python
+# (3.12 on 24.04, newer on 26.04 -- both lack distutils) and fail. Point it
+# at the system python3 explicitly instead.
 env -u VIRTUAL_ENV PATH=/usr/bin:/bin:/usr/local/bin \
     npm rebuild canvas --build-from-source --python=/usr/bin/python3
 
@@ -474,7 +478,7 @@ $EDITOR deploy.env
 | `TILESERVER_HOME` | `/home/$USER_NAME/tileserver-gl` | tileserver-gl の npm プロジェクトルート |
 | `TILESERVER_DATA` | `$TILESERVER_HOME/data` | tileserver-gl データディレクトリ |
 | `HTTP_ROOT` | `/home/$USER_NAME/http/$DOMAIN` | nginx 静的ルート (demo.html、ACME challenge) |
-| `PLANETILER_XMX` | `32736m` | Planetiler の Java ヒープ (`-Xms`/`-Xmx`。§8) |
+| `PLANETILER_XMX` | `32736m` | Planetiler の Java ヒープ (`-Xms`/`-Xmx`。§7) |
 | `REPO` | `/home/$USER_NAME/tileserver-noborder` | systemd ユニットの ExecStart パス用(下記の「シェルの `$REPO`」と役割が異なる) |
 
 **(B) シェル / 共通**
@@ -488,18 +492,12 @@ $EDITOR deploy.env
 
 | 変数 | 既定値 | 用途 |
 |---|---|---|
-| `SKIP_PLANET_DOWNLOAD` | `0` | `1` で planet PBF の再ダウンロードを省略し、既存 `pbf/global.osm.pbf` で再ビルド (§11.1) |
+| `SKIP_PLANET_DOWNLOAD` | `0` | `1` で planet PBF の再ダウンロードを省略し、既存 `pbf/global.osm.pbf` で再ビルド (§10.1) |
 | `PLANET_URL` | `https://planet.passportcontrol.net/pbf/planet-latest.osm.pbf` | planet PBF 取得元(国内ミラー優先。§4) |
 | `PLANET_URL_FALLBACK` | `https://planet.openstreetmap.org/pbf/planet-latest.osm.pbf` | 上記が不通のときのフォールバック |
 | `PLANETILER_XMX` | `32736m` | (A) と同じ。`deploy.env` 由来 |
 
-**(D) `scripts/buffer_clip.py`**
-
-| 変数 | 既定値 | 用途 |
-|---|---|---|
-| `BUFFER_KM` | `0` | `--inputs` GeoJSON に適用する測地バッファ距離(**キロメートル**)。`0` で拡大なし(verbatim)。`--bbox`/`--polygon` には適用されない (§6) |
-
-**(E) `scripts/build_fonts.sh`**
+**(D) `scripts/build_fonts.sh`**
 
 | 変数 | 既定値 | 用途 |
 |---|---|---|
@@ -507,11 +505,11 @@ $EDITOR deploy.env
 | `WORK` | `/tmp/tileserver-fonts-build` | フォントビルドの作業ディレクトリ |
 | `OMT_FONTS_REF` | `master` | 取得する `openmaptiles/fonts` の commit/tag |
 
-**(F) systemd ユニット内で設定 (操作者が触る必要は通常なし)**
+**(E) systemd ユニット内で設定 (操作者が触る必要は通常なし)**
 
 | 変数 | 値 | 設定箇所 | 用途 |
 |---|---|---|---|
-| `LIBGL_ALWAYS_SOFTWARE` | `1` | `tileserver-gl.service` の `Environment=` | Xvfb 下で Mesa ソフトウェア描画を強制(ラスター描画。§9.6) |
+| `LIBGL_ALWAYS_SOFTWARE` | `1` | `tileserver-gl.service` の `Environment=` | Xvfb 下で Mesa ソフトウェア描画を強制(ラスター描画。§8.6) |
 
 ---
 
@@ -534,74 +532,24 @@ sed 's/planet-latest\.osm\.pbf/global.osm.pbf/' planet-latest.osm.pbf.md5 | md5s
 ```
 
 - 転送量が大きい (~85 GB) ため、**国内 OSM PBF ミラー [planet.passportcontrol.net](https://planet.passportcontrol.net/pbf/) の利用を推奨**(本家 planet.openstreetmap.org はフォールバック)
-- 初回のみダウンロード、以降は年次で更新 (§11 参照)。`scripts/rebuild.sh` も同じミラー優先で取得する
+- 初回のみダウンロード、以降は年次で更新 (§10 参照)。`scripts/rebuild.sh` も同じミラー優先で取得する
 
 > **注記**: 北方領土はロシア領として、竹島は韓国領として記述される feature が存在するため、地域抽出ではこれらを取りこぼすリスクがある。本書が全球データを前提とするのはこの理由による。
 
 ---
 
-## 5. Step 2: 島嶼ポリゴンの取得 (legacy・任意)
+## 5. Step 2: 切り出し領域の `.poly` を生成
 
-> **本ステップは現構成では不要**(§6 で係争地を明示座標で定義するため)。`buffer_clip.py --inputs` に GeoJSON を渡す任意の運用をする場合のみ実施する。それ以外は §5 をスキップしてよい。
-
-島嶼ポリゴンを OSM.jp から取得する。同梱しないポリシー (`.gitignore` で `geojson/*.geojson` を除外) のため操作者が取得する。属性は使わずジオメトリのみ利用。z=10 で解像度 ~150 m。
-
-詳細とライセンスは `geojson/README.md` および `geojson/LICENSE` を参照。
-
-### 5.1 抽出スクリプト
-
-リポジトリ内の `scripts/fetch_osmjp.py` を使用する。OSM.jp の TileJSON エンドポイントから島嶼 polygon を MVT 経由で取得し、ジオメトリのみ (`properties` は空) の GeoJSON に展開する。
-
-| 引数 | 意味 |
-|---|---|
-| `--tilejson` | TileJSON URL (例: `https://tile.openstreetmap.jp/data/hoppo.json`) |
-| `--layer` | MVT 内の vector layer 名 (本書では `island`) |
-| `--zoom` | 取得ズーム (既定 10、TileJSON の min/max にクランプ) |
-| `--out` | 出力 GeoJSON パス |
-
-### 5.2 実行
-
-```bash
-source "$REPO/venv/bin/activate"
-# (要 pip install: requests mercantile mapbox-vector-tile shapely pyproj — §3 参照)
-
-"$REPO/scripts/fetch_osmjp.py" \
-    --tilejson https://tile.openstreetmap.jp/data/hoppo.json \
-    --layer island --zoom 10 \
-    --out "$REPO/geojson/hoppo.geojson"
-
-"$REPO/scripts/fetch_osmjp.py" \
-    --tilejson https://tile.openstreetmap.jp/data/takeshima.json \
-    --layer island --zoom 10 \
-    --out "$REPO/geojson/takeshima.geojson"
-
-deactivate
-
-jq '.features | length' "$REPO/geojson/"*.geojson
-```
-
-POI レイヤーは bbox が島嶼 polygon と同一のため取得不要 (2 km バッファで吸収される)。
-
-> **以降の rebuild では再取得不要**: 取得したファイルは `$REPO/geojson/` に保存され、年次 rebuild ループ (§11) はこれを入力として使うのみ。OSM.jp は二度と叩かない。地理的境界の更新が必要になった場合のみ、上記コマンドを再実行してファイルを上書きする (年単位の頻度)。
-
----
-
-## 6. Step 3: 切り出し領域の `.poly` を生成 (座標ベース・GeoJSON 不要)
-
-係争地の切り出し領域を**明示座標**で定義し、全球を外周・各領域を「穴」とした osmium 用 `.poly` を出力する。**外部 GeoJSON (OSM.jp) は使わない** — リポジトリ内の `scripts/buffer_clip.py` に座標を渡すだけで、ビルドは OSM.jp に一切依存しない。
+係争地の切り出し領域を経緯度座標で定義し、全球を外周・各領域を「穴」とした osmium 用 `.poly` を `scripts/buffer_clip.py` で出力する。
 
 | 引数 | 必須 | 意味 |
 |---|---|---|
-| `--polygon` | (複数可) | 任意の経緯度ポリゴン (`lon,lat;lon,lat;...`、3 頂点以上) を**バッファ無し**で領域に追加。北方領土の輪郭等 |
-| `--bbox` | (複数可) | `W,S,E,N` (min_lon,min_lat,max_lon,max_lat) の経緯度矩形を**バッファ無し**で追加。竹島・尖閣等 |
-| `--inputs` | (任意) | 入力 GeoJSON (和集合)。**既定では拡大なし (verbatim)**。本構成では未使用 (アドホック用に残置) |
-| `--buffer-m` | (既定 `BUFFER_KM`×1000) | `--inputs` に適用する測地バッファ (メートル)。`--bbox`/`--polygon` には適用されない |
-
-> **範囲拡大は既定で OFF**(`--inputs` も含め全領域 verbatim)。`--inputs` を拡大したい場合のみ、環境変数 **`BUFFER_KM`** に**キロメートル**で距離を指定する(例: `BUFFER_KM=2 buffer_clip.py --inputs ...` で 2 km バッファ)。`BUFFER_KM=0`(既定)で無効。`--buffer-m`(メートル)で明示上書きも可。
+| `--polygon` | (複数可) | 任意の経緯度ポリゴン (`lon,lat;lon,lat;...`、3 頂点以上) を領域に追加。北方領土の輪郭等 |
+| `--bbox` | (複数可) | `W,S,E,N` (min_lon,min_lat,max_lon,max_lat) の経緯度矩形を領域に追加。竹島・尖閣等 |
 | `--out` | ✓ | 出力 `.poly` パス |
-| `--debug` | ✓ | 領域和集合の GeoJSON (目視検証用。§3.5/§3.6 もこれを使う) |
+| `--debug` | ✓ | 領域和集合の GeoJSON (目視検証用。§6 / §6.2 の抽出マスクにも使う) |
 
-> `--polygon` / `--bbox` のうち少なくとも 1 つ (または `--inputs`) が必要。座標の入力は `lon,lat` 順 (GeoJSON 標準)。緯度経度 (`lat,lon`) で与えられた値は読み替えること。
+> 座標はいずれも与えたとおりに使われる (バッファ等の拡大はしない)。`--polygon` / `--bbox` のうち少なくとも 1 つが必要。座標の入力は `lon,lat` 順 (GeoJSON 標準)。緯度経度 (`lat,lon`) で与えられた値は読み替えること。
 
 ```bash
 # BUILD_ROOT は deploy.env の値 (既定 /work/$USER_NAME/planetiler)
@@ -646,13 +594,11 @@ PY
 deactivate
 ```
 
-> `scripts/verify_buffer.py` は `--inputs` の 2 km バッファ専用の旧検証 (択捉北端の 1/3 km 判定)。座標ベースの本構成では上記の包含チェックを使う。
-
 ---
 
-## 7. Step 4: osmium で本体を島嶼 +2km 抜きでクリップ
+## 6. Step 3: osmium で本体を島嶼抜きでクリップ
 
-> このステップ (§7 + §7.1) は本体 `clipped.osm.pbf` を**島内地物抜き**で作る。島の地物は §7.2 で**文字を剥がして**戻す(島は無名のまま地物を描く。設計は §1.3)。
+> このステップ (§6 + §6.1) は本体 `clipped.osm.pbf` を**島内地物抜き**で作る。島の地物は §6.2 で**文字を剥がして**戻す(島は無名のまま地物を描く。設計は §1.3)。
 
 ```bash
 . "$REPO/deploy.env"
@@ -667,12 +613,12 @@ osmium extract \
     pbf/global.osm.pbf
 ```
 
-**検証:** バッファ領域 (`islands_buffered.geojson`) を extract マスクに使う。粗い bbox では知床・納沙布・ハボマイ周辺の北海道本土側を巻き込んでしまうので不適。
+**検証:** 領域 GeoJSON (`islands_buffered.geojson`) を extract マスクに使う。粗い bbox では知床・納沙布・ハボマイ周辺の北海道本土側を巻き込んでしまうので不適。
 
 `natural=coastline` の島輪郭線は §1.3 の仕様で silhouette として残すため、検証では「ラベル/POI/道路/建物を生む tag を直接持つ feature」だけを数える。`osmium tags-filter` は暗黙的に relation member を引きずり込むため、直接タグ付きの element のみを抽出するヘルパー `scripts/residual_label_ids.py` を用いる。
 
 ```bash
-# バッファ内の残存だけを抜く (simple strategy: 完全に内側のもののみ)
+# 領域内の残存だけを抜く (simple strategy: 完全に内側のもののみ)
 osmium extract --overwrite --strategy=simple \
     -p build/islands_buffered.geojson \
     -o /tmp/resid.osm.pbf pbf/clipped.osm.pbf
@@ -680,14 +626,14 @@ osmium cat /tmp/resid.osm.pbf -f opl -o /tmp/resid.opl --overwrite
 
 # ラベル/POI 化する tag を直接持つ element の ID 一覧
 "$REPO/scripts/residual_label_ids.py" --opl /tmp/resid.opl > /tmp/rm_ids.txt
-echo "バッファ内の label/POI feature: $(wc -l < /tmp/rm_ids.txt)"
+echo "領域内の label/POI feature: $(wc -l < /tmp/rm_ids.txt)"
 ```
 
-期待値は Hoppo + Takeshima 合わせて数個〜数十個程度。`smart` strategy は relation 完結性維持のため、Habomai archipelago などの named multipolygon relation が他の広域 relation のメンバー参照で保持されることがある。これらは次節でクリーンアップする。
+期待値は数個〜数十個程度。`smart` strategy は relation 完結性維持のため、Habomai archipelago などの named multipolygon relation が他の広域 relation のメンバー参照で保持されることがある。これらは次節でクリーンアップする。
 
-### 7.1 (推奨) label/POI 化する残存 feature の除去
+### 6.1 (推奨) label/POI 化する残存 feature の除去
 
-§7 で得た `/tmp/rm_ids.txt` をそのまま `osmium removeid` に渡す。リストは「直接タグ付きの element のみ」なので、coastline silhouette を巻き込む心配はない。
+§6 で得た `/tmp/rm_ids.txt` をそのまま `osmium removeid` に渡す。リストは「直接タグ付きの element のみ」なので、coastline silhouette を巻き込む心配はない。
 
 ```bash
 cd "$BUILD_ROOT"
@@ -698,9 +644,9 @@ if [[ -s /tmp/rm_ids.txt ]]; then
 fi
 ```
 
-削除後に §7 の検証を再実行して `rm_ids.txt` が空になっていれば完了。この時点で `clipped.osm.pbf` は**島内地物を一切含まない**(名前付きは §7.1 で除去、その他は §7 の clip で穴抜き済み)。
+削除後に §6 の検証を再実行して `rm_ids.txt` が空になっていれば完了。この時点で `clipped.osm.pbf` は**島内地物を一切含まない**(名前付きは §6.1 で除去、その他は §6 の clip で穴抜き済み)。
 
-### 7.2 文字を剥がした島内地物を戻す (§1.3)
+### 6.2 文字を剥がした島内地物を戻す (§1.3)
 
 島を「無地のシルエット」ではなく「**地物は描くが無名**」にするため、島域を別途抽出して**文字系タグだけを剥がし**、本体に merge で戻す。文字タグ除去は `scripts/strip_island_labels.py`(OPL を読み、`name`/`name:*`/`alt_name` 等・route `ref`・`addr:housenumber` を落とし、ジオメトリと非文字タグは保持)。
 
@@ -712,7 +658,7 @@ osmium extract --overwrite --strategy=smart \
     -p build/islands_buffered.geojson \
     -o pbf/islands.osm.pbf pbf/global.osm.pbf
 
-# OPL 経由で文字タグを除去 (osmium-tool + Python のみ。pyosmium 不要)
+# OPL 経由で文字タグを除去 (osmium-tool + Python 標準ライブラリのみ)
 osmium cat pbf/islands.osm.pbf -f opl -o - --overwrite \
   | "$REPO/scripts/strip_island_labels.py" \
   | osmium cat -F opl -f pbf -o pbf/islands_notext.osm.pbf --overwrite -
@@ -724,15 +670,15 @@ osmium merge --overwrite \
 mv pbf/clipped_with_islands.osm.pbf pbf/clipped.osm.pbf
 ```
 
-`clipped` 側に名前付き島内地物が無い(§7.1)ため、ラベルの供給源は除去版のみ=**ラベル漏れなし**。両方に現れ得るのは無名ジオメトリ(海岸線等)だけで、`osmium merge` の重複排除はどちらを残してもラベル上は等価。
+`clipped` 側に名前付き島内地物が無い(§6.1)ため、ラベルの供給源は除去版のみ=**ラベル漏れなし**。両方に現れ得るのは無名ジオメトリ(海岸線等)だけで、`osmium merge` の重複排除はどちらを残してもラベル上は等価。
 
-> **検証 (rebuild なしで可)**: `osmium cat pbf/islands_notext.osm.pbf -f opl | grep -c 'Tname='` 等で名称タグが消えていること、`grep -c waterway= / highway=` 等で地物が残っていることを確認できる。実際の地図反映には §8 の Planetiler 再ビルドが必要。
+> **検証 (rebuild なしで可)**: `osmium cat pbf/islands_notext.osm.pbf -f opl | grep -c 'Tname='` 等で名称タグが消えていること、`grep -c waterway= / highway=` 等で地物が残っていることを確認できる。実際の地図反映には §7 の Planetiler 再ビルドが必要。
 >
-> **所要時間**: 島抽出は global (~85 GB) の全読み、merge も `clipped` (~85 GB) の読み書きを伴うため、リビルドに数十分上乗せされる(`scripts/rebuild.sh` では §3.6 として自動実行)。
+> **所要時間**: 島抽出は global (~85 GB) の全読み、merge も `clipped` (~85 GB) の読み書きを伴うため、リビルドに数十分上乗せされる(`scripts/rebuild.sh` では手順 (3.6) として自動実行)。
 
 ---
 
-## 8. Step 5: Planetiler で MBTiles をビルド
+## 7. Step 4: Planetiler で MBTiles をビルド
 
 ```bash
 . "$REPO/deploy.env"
@@ -759,11 +705,11 @@ java -Xms"$PLANETILER_XMX" -Xmx"$PLANETILER_XMX" -jar src/planetiler.jar \
 **オプションの要点:**
 
 - `--download` : Natural Earth と水域ポリゴン (海岸線) を自動取得。セットアップ時のみの外部アクセス。
-- `--languages=en` : `name:LANG` 属性を出力に保持する言語。本構成は **英語 (Latin) ラベルのみ描画** (§1.1 / §9.3 `patch_style.py` の text-field 書き換えによって全 text-field が `["coalesce", ["get","name:en"], ["get","name:latin"]]` に固定される) ため、`name:en` と `name:latin` があれば十分。ここに `ja,ko,ru` 等を足しても MBTiles サイズが増えるだけで描画には影響しない。
+- `--languages=en` : `name:LANG` 属性を出力に保持する言語。本構成は **英語 (Latin) ラベルのみ描画** (§1.1 / §8.3 `patch_style.py` の text-field 書き換えによって全 text-field が `["coalesce", ["get","name:en"], ["get","name:latin"]]` に固定される) ため、`name:en` と `name:latin` があれば十分。ここに `ja,ko,ru` 等を足しても MBTiles サイズが増えるだけで描画には影響しない。
 - `--transliterate=false` : **自動ローマ字化(音訳)の完全無効化**。OpenMapTiles のデフォルトでは元の `name` が非 Latin で Latin 名が無い場合、ICU による音訳で `name:latin` を生成するが、日本語・中国語・ハングル等で極めて低品質な結果を出力する (例: 東京 → "Dong Jing" 相当)。このフラグを指定すると以下の挙動になる:
     - 元の `name` が非 Latin で `name:en` があれば → `name:latin = name:en` (自然な英語表記)
     - 元の `name` が非 Latin で `name:en` も無い → **`name:latin` は空** → text-field の `name:en`/`name:latin` がどちらも空になり**ラベルそのものが描画されない**
-    - なお、元の `name` が既に Latin の場合 (例: グリーンランド `Kalaallit Nunaat`) は planetiler がその `name` をそのまま `name:latin` に残すため `name:latin ≠ name:en` となりうる。この差を英語表記に寄せるため、text-field は `name:latin` 単独ではなく **`name:en` を最優先**する (§9.3 手順 5)。
+    - なお、元の `name` が既に Latin の場合 (例: グリーンランド `Kalaallit Nunaat`) は planetiler がその `name` をそのまま `name:latin` に残すため `name:latin ≠ name:en` となりうる。この差を英語表記に寄せるため、text-field は `name:latin` 単独ではなく **`name:en` を最優先**する (§8.3 手順 2)。
     - 副次効果: 高コストな音訳処理がスキップされビルドが**数〜十数%高速化**
 - `-Xms32736m -Xmx32736m` (既定、`deploy.env` の `PLANETILER_XMX` で上書き可) : Java ヒープを 32 GiB − 32 MiB に固定。2 つの効果がある:
     - **CompressedOops 有効維持**: JVM は既定で `-Xmx` が約 32 GiB を超えると 32-bit compressed object pointer を無効化し、reference サイズが 8 B に倍増する。ヒープ使用量が 10〜30% 増え、CPU キャッシュ効率も落ちる。`32736m` は閾値の直下 (32 GiB − 32 MiB) に確実に収まる保守的な値
@@ -789,7 +735,7 @@ java -Xms"$PLANETILER_XMX" -Xmx"$PLANETILER_XMX" -jar src/planetiler.jar \
 >     tippecanoe-decode -c /dev/stdin 10 897 404 | \
 >     jq '.features[] | select(.properties.class=="village") | .properties | {name, "name:en", "name:latin"}'
 > ```
-> 旧動作では `name:latin` にヘンテコ音訳が入っていた行が、新動作では空欄になっている。
+> `name:en` が無い行は `name:latin` が空欄になっている。
 
 **検証:**
 
@@ -798,22 +744,22 @@ sqlite3 mbtiles/final.mbtiles "SELECT name, value FROM metadata WHERE name IN ('
 sqlite3 mbtiles/final.mbtiles "SELECT value FROM metadata WHERE name='json';" | jq '.vector_layers[].id'
 ```
 
-`water`, `boundary`, `place`, `transportation` 等、標準 OpenMapTiles レイヤーが並ぶこと。`island` / `island_poi` は**含まれない** (OSM.jp 由来を合成しないため、これが仕様通り)。
+`water`, `boundary`, `place`, `transportation` 等、標準 OpenMapTiles レイヤーが並ぶこと。
 
 ---
 
-## 9. Step 6: 自前 tileserver-gl のセットアップ
+## 8. Step 5: 自前 tileserver-gl のセットアップ
 
-### 9.1 スタイル本体と sprite の取得
+### 8.1 スタイル本体と sprite の取得
 
-本構成では **2 つのスタイル** を配信する。スタイル本体は OpenMapTiles 公式 (BSD 3-Clause + CC-BY 4.0) から直接取得する。OSM.jp 経由ではない。
+本構成では **2 つのスタイル** を配信する。スタイル本体は OpenMapTiles 公式 (BSD 3-Clause + CC-BY 4.0) から取得する。
 
 | スタイル ID (ローカル配信名) | 上流リポジトリ | 上流タグ | 特徴 |
 |---|---|---|---|
 | `maptiler-toner-en` | [openmaptiles/maptiler-toner-gl-style](https://github.com/openmaptiles/maptiler-toner-gl-style) | `v1.0` | 白黒・高コントラスト・情報量少 |
 | `maptiler-basic-en` | [openmaptiles/maptiler-basic-gl-style](https://github.com/openmaptiles/maptiler-basic-gl-style) | `v1.10` | カラー・情報量多 |
 
-> **`-en` サフィックスについて**: 上流の style.json はラベルで `{name:latin}` を直接参照する英語ベース構成のため、別途「英語版」があるわけではない (本書のパッチで text-field を `name:en` 優先へ書き換える、§9.3 手順 5)。ローカル配信ディレクトリ名の慣例として `-en` を付け、「Latin スクリプト固定描画」の意図を示す。
+> **`-en` サフィックスについて**: 上流の style.json はラベルで `{name:latin}` を直接参照する英語ベース構成のため、別途「英語版」があるわけではない (本書のパッチで text-field を `name:en` 優先へ書き換える、§8.3 手順 2)。ローカル配信ディレクトリ名の慣例として `-en` を付け、「Latin スクリプト固定描画」の意図を示す。
 
 公開 URL:
 - `https://tile.hogehoge.com/styles/maptiler-toner-en/style.json`
@@ -845,9 +791,9 @@ fetch_sprites maptiler-basic-en  maptiler-basic-gl-style
 ls -la styles/ sprites/
 ```
 
-> **ライセンス**: 上流 style.json のコードは BSD 3-Clause、design (look & feel) は CC-BY 4.0 (Toner はさらに Stamen Design への ISC ベース由来あり)。改変版を再配布する際の attribution 文字列は `patch_style.py` が `metadata.attribution` に自動で書き込む。詳細は §13。
+> **ライセンス**: 上流 style.json のコードは BSD 3-Clause、design (look & feel) は CC-BY 4.0 (Toner はさらに Stamen Design への ISC ベース由来あり)。改変版を再配布する際の attribution 文字列は `patch_style.py` が `metadata.attribution` に自動で書き込む。詳細は §12。
 
-### 9.2 フォントの取得 (Google Fonts 可変フォントから instance → PBF 化)
+### 8.2 フォントの取得 (Google Fonts 可変フォントから instance → PBF 化)
 
 上流 style.json が参照するフォント:
 
@@ -856,9 +802,9 @@ ls -la styles/ sprites/
 | `maptiler-basic-en` | `Noto Sans Regular`、`Noto Sans Bold` |
 | `maptiler-toner-en` | `Noto Sans Italic`、`Noto Sans Bold Italic`、`Nunito Regular`、`Nunito Bold`、`Nunito Semi Bold`、`Nunito Extra Bold` |
 
-合計 **8 書体**。`maptiler-toner-en` はズーム補間の `text-font` stops 内で `Nunito Regular` / `Nunito Bold` も参照する（例: `stops:[[3,["Nunito Regular"]],[4,["Nunito Bold"]]]`）。ブラウザのベクター描画は欠落フォントを寛容に無視するが、**`serve_rendered: true`（§9.5）のサーバ側ラスター描画は、参照フォントが 1 つでも欠けるとそのタイルを `Failed to load glyph range ... Invalid range` で 500 にする**。したがって Nunito は 4 ウェイトすべてを生成する必要がある。
+合計 **8 書体**。`maptiler-toner-en` はズーム補間の `text-font` stops 内で `Nunito Regular` / `Nunito Bold` も参照する（例: `stops:[[3,["Nunito Regular"]],[4,["Nunito Bold"]]]`）。ブラウザのベクター描画は欠落フォントを寛容に無視するが、**`serve_rendered: true`（§8.5）のサーバ側ラスター描画は、参照フォントが 1 つでも欠けるとそのタイルを `Failed to load glyph range ... Invalid range` で 500 にする**。したがって Nunito は 4 ウェイトすべてを生成する必要がある。
 
-§9.3 の `patch_style.py` で全 `text-field` が `name:en`/`name:latin` (どちらも Latin スクリプト) のみ参照するよう書き換えられるため、**描画されるのは Latin (+ 可変フォントに含まれる Greek/Cyrillic) のみ**。CJK や Arabic 等の glyph は一切不要で、font stack は合計 ~16 MB に収まる。
+§8.3 の `patch_style.py` で全 `text-field` が `name:en`/`name:latin` (どちらも Latin スクリプト) のみ参照するよう書き換えられるため、**描画されるのは Latin (+ 可変フォントに含まれる Greek/Cyrillic) のみ**。CJK や Arabic 等の glyph は一切不要で、font stack は合計 ~16 MB に収まる。
 
 tileserver-gl が必要とするのは各書体の **PBF font stack** (`0-255.pbf`、`256-511.pbf`、…、計 256 ファイル／書体) で、これは TTF を [fontnik](https://github.com/mapbox/node-fontnik) で SDF レンダリングして生成する。
 
@@ -880,22 +826,17 @@ tileserver-gl が必要とするのは各書体の **PBF font stack** (`0-255.pb
 
 生成物は `/home/foobar/tileserver-gl/data/fonts/` の 8 ディレクトリ（各 1.4–2.3 MB、合計 ~16 MB）。`OUTPUT_DIR` 環境変数で別パスを指定可能。
 
-> **フォントの補足**: `patch_style.py` の `migu*` 置換 (§9.3) は上流スタイルでは no-op(`migu1c/migu2m` 参照が無いため)。`Nunito Regular` / `Nunito Bold` は上流 toner が参照するため**生成が必要**(上の表のとおり)。
+### 8.3 スタイルのパッチ (ローカル化 + 境界線中立化)
 
-### 9.3 スタイルの独立化 + 境界線中立化パッチ
-
-以下 10 項目を一括で両スタイルに適用する Python スクリプト。
+以下 7 項目を一括で両スタイルに適用する Python スクリプト。
 
 1. `openmaptiles` ソースの URL を mbtiles スキームに変更
-2. `hoppo` / `takeshima` ソースを削除 → OSM.jp へのランタイム依存を排除
-3. それらを参照する 5 つのレイヤー (`island-hoppo`, `island-hoppo-name`, `island-takeshima`, `island-takeshima-name`, `island-takeshima-poi`) を削除
-4. `migu1c-regular` / `migu2m-regular` → `Noto Sans Regular` に置換
-5. **全 `text-field` を `["coalesce", ["get","name:en"], ["get","name:latin"]]` に書き換え** → 上流スタイルの `{name:latin} {name:nonlatin}` 表記から nonlatin 部分を除去しつつ、`name:en` を最優先で参照。元の `name` が既に Latin だが英語名と異なる地物 (グリーンランド `Kalaallit Nunaat` → `Greenland`、ドイツ `Deutschland`、コートジボワール等) でも英語名で描画される。`name:latin` フォールバックは非 Latin 由来の音訳名 (東京→Tokyo) をカバー。`name` へのフォールバックは意図的に持たない (非 Latin 字形が font stack に戻るため)。§1.1 設計意図・§8 `--transliterate=false` と整合 (`{housenumber}` 等の非 name フィールドは不変・冪等)
-6. **`boundary` レイヤーの全フィルターに `["!=", "maritime", 1]` を追加** → `maritime=1` の海上国境線を非表示 (第一段。§1.2.1/§1.2.4)
-7. **`admin_level` ≤ 2 を描画する国境専用レイヤーを削除し、`admin_level` = 2, 3 を州/県境 (`admin_level` = 4) のレイヤーに合流** → 陸上の国境線も州/県境と同一スタイルで描画される
-8. **国名ラベル (`place.class=country`) の `maxzoom` を 5 に制限** → z0–4 のみ表示、z5 以上では非表示
-9. **`water` 塗りを `boundary` 線レイヤーの直上へ移動し、`transportation` を `water` の上へ持ち上げ** → `maritime=0` を含む**全ての海上境界線**を water 被覆で非表示にしつつ、海上の橋・桟橋・フェリー・トンネルは可視のまま (§1.2.5)
-10. `sprite` / `glyphs` を tileserver-gl がローカル解決できる相対パス (`<style-id>/sprite`、`{fontstack}/{range}.pbf`) に書き換え (絶対 URL は埋め込まない)。glyphs に `fonts/` プレフィックスは付けない — tileserver-gl が描画時に `fonts://` を、配信時に `local://fonts/` を自前で前置するため、付けると描画パスが二重 `fonts/` になりラスタータイルが 500 になる
+2. **全 `text-field` を `["coalesce", ["get","name:en"], ["get","name:latin"]]` に書き換え** → 上流スタイルの `{name:latin} {name:nonlatin}` 表記から nonlatin 部分を除去しつつ、`name:en` を最優先で参照。元の `name` が既に Latin だが英語名と異なる地物 (グリーンランド `Kalaallit Nunaat` → `Greenland`、ドイツ `Deutschland`、コートジボワール等) でも英語名で描画される。`name:latin` フォールバックは非 Latin 由来の音訳名 (東京→Tokyo) をカバー。`name` へのフォールバックは意図的に持たない (非 Latin 字形が font stack に戻るため)。§1.1 設計意図・§7 `--transliterate=false` と整合 (`{housenumber}` 等の非 name フィールドは不変・冪等)
+3. **`boundary` レイヤーの全フィルターに `["!=", "maritime", 1]` を追加** → `maritime=1` の海上国境線を非表示 (第一段。§1.2.1/§1.2.4)
+4. **`admin_level` ≤ 2 を描画する国境専用レイヤーを削除し、`admin_level` = 2, 3 を州/県境 (`admin_level` = 4) のレイヤーに合流** → 陸上の国境線も州/県境と同一スタイルで描画される
+5. **国名ラベル (`place.class=country`) の `maxzoom` を 5 に制限** → z0–4 のみ表示、z5 以上では非表示
+6. **`water` 塗りを `boundary` 線レイヤーの直上へ移動し、`transportation` を `water` の上へ持ち上げ** → `maritime=0` を含む**全ての海上境界線**を water 被覆で非表示にしつつ、海上の橋・桟橋・フェリー・トンネルは可視のまま (§1.2.5)
+7. `sprite` / `glyphs` を tileserver-gl がローカル解決できる相対パス (`<style-id>/sprite`、`{fontstack}/{range}.pbf`) に書き換え (絶対 URL は埋め込まない)。glyphs に `fonts/` プレフィックスは付けない — tileserver-gl が描画時に `fonts://` を、配信時に `local://fonts/` を自前で前置するため、付けると描画パスが二重 `fonts/` になりラスタータイルが 500 になる
 
 > **パッチ後の挙動**
 >
@@ -921,13 +862,13 @@ for STYLE in maptiler-toner-en maptiler-basic-en; do
 done
 ```
 
-> **ドメインは焼き込まない**: 項目 10 の通り、`patch_style.py` は `sprite` / `glyphs` を**ローカル相対パス**として書き込み、配信ドメインは一切埋め込まない。配信される style.json の絶対 URL 化は **tileserver-gl が行う** — nginx が転送する `Host` / `X-Forwarded-Proto` (§9.7.5 の `proxy_set_header`) からリクエスト元のドメインを使って `sprite` / `glyphs` を `https://<DOMAIN>/...` に展開する。このため on-disk の style.json はドメイン非依存で、`$DOMAIN` を変えても再パッチ不要。
+> **ドメインは焼き込まない**: 項目 7 の通り、`patch_style.py` は `sprite` / `glyphs` を**ローカル相対パス**として書き込み、配信ドメインは一切埋め込まない。配信される style.json の絶対 URL 化は **tileserver-gl が行う** — nginx が転送する `Host` / `X-Forwarded-Proto` (§8.7.5 の `proxy_set_header`) からリクエスト元のドメインを使って `sprite` / `glyphs` を `https://<DOMAIN>/...` に展開する。このため on-disk の style.json はドメイン非依存で、`$DOMAIN` を変えても再パッチ不要。
 >
-> **重要 (tileserver-gl 5.x)**: `sprite` に絶対 http(s) URL を書くと、tileserver-gl は sprite を自前配信対象として登録せず、`/styles/<id>/sprite.json` が `400 Bad Sprite ID or Scale` になる (§12)。必ずローカル相対パス (本スクリプトの既定動作) のままにすること。
+> **重要 (tileserver-gl 5.x)**: `sprite` に絶対 http(s) URL を書くと、tileserver-gl は sprite を自前配信対象として登録せず、`/styles/<id>/sprite.json` が `400 Bad Sprite ID or Scale` になる (§11)。必ずローカル相対パス (本スクリプトの既定動作) のままにすること。
 
 実行ログには各スタイルについて以下の数値が出力される: 削除されたレイヤー数 (`country-only layers removed` = 2)、合流パッチが当たったレイヤー数 (`sub-national layers merged` = 1)、`maxzoom=5` を設定した国名ラベル数 (`country labels`)、maritime ガードを付与した boundary レイヤー数 (`boundary layers w/ maritime-guard`)、water を boundary の上へ移動したか (`water raised above boundaries`)、water マスクの上へ持ち上げた transportation レイヤー数 (`transportation lifted over mask`)。
 
-スクリプトの主要シンボル (検証コマンド §10.2.1 やトラブルシューティング §12 から参照される):
+スクリプトの主要シンボル (検証コマンド §9.2.1 やトラブルシューティング §11 から参照される):
 
 | 識別子 | 意味 |
 |---|---|
@@ -940,9 +881,9 @@ done
 | `neutralize_country_boundaries(style)` | (A)(B)(C) を一括実施 |
 | `mask_sea_boundaries(style)` | §1.2.5: `water` を boundary の上へ移動し、`transportation` を `water` の上へ持ち上げる (海上境界線を被覆、橋/トンネルは残す)。冪等・移動のみ |
 
-> 実行後、各スタイルの `boundary` 関連レイヤー (Toner-en で 3 個、Maptiler-Basic-en で 3 個) すべてに maritime ガードが入る。また両スタイルから OSM.jp 依存 (hoppo/takeshima ソースと 5 レイヤー) が削除される。
+> 実行後、各スタイルの `boundary` 関連レイヤー (Toner-en で 3 個、Maptiler-Basic-en で 3 個) すべてに maritime ガードが入る。
 
-### 9.4 MBTiles を配置
+### 8.4 MBTiles を配置
 
 ビルド作業ディレクトリ (`/work`) と配信ディレクトリ (`/home`) が別ファイルシステムの可能性があるため、**クロスファイルシステム対応のアトミック配置**を行う。`cp` で配信側にコピー後、同一 FS 内で `mv` rename する (`rename(2)` は同一 FS 内でのみアトミック)。
 
@@ -958,7 +899,7 @@ mv -f $HOME/tileserver-gl/data/openmaptiles.mbtiles.new \
 
 初回配置時は rename 元ファイルが無い状態からでも同じコマンドで問題なく動作する。
 
-### 9.5 tileserver-gl の config.json
+### 8.5 tileserver-gl の config.json
 
 render 出力の `staging/data/tileserver-gl/config.json` を tileserver-gl のデータディレクトリに配置する:
 
@@ -970,7 +911,7 @@ install -m 0644 -o "$USER_NAME" -g "$USER_NAME" \
     "$TILESERVER_DATA/config.json"
 ```
 
-これにより、2 スタイル × 1 共通 MBTiles (`openmaptiles.mbtiles`) の配信となる。MBTiles の重複保持は不要。
+2 スタイルが 1 つの共通 MBTiles (`openmaptiles.mbtiles`) を参照する構成になる。
 
 公開される URL の対応関係:
 
@@ -986,31 +927,42 @@ install -m 0644 -o "$USER_NAME" -g "$USER_NAME" \
 | `https://tile.hogehoge.com/styles/{id}.json` | ラスター TileJSON (XYZ URL を含む) |
 | `https://tile.hogehoge.com/fonts/{fontstack}/{range}.pbf` | `fonts/{fontstack}/{range}.pbf` |
 
-> **`serve_rendered: true`（本書既定）**: サーバ側でラスター (PNG) タイルを描画する。これにより `/styles/{id}/{z}/{x}/{y}.png` の XYZ ラスター URL とランディングページのラスタービューアが有効になり、**ラスター専用クライアント（例: WordPress「Leaflet Map」プラグイン、§14.2.1）から利用できる**。描画は外部に出ず、ローカルの mbtiles + スタイル + フォント + sprite だけで完結する（OSM.jp 非依存は維持）。
+> **`serve_rendered: true`（本書既定）**: サーバ側でラスター (PNG) タイルを描画する。これにより `/styles/{id}/{z}/{x}/{y}.png` の XYZ ラスター URL とランディングページのラスタービューアが有効になり、**ラスター専用クライアント（例: WordPress「Leaflet Map」プラグイン、§13.2.1）から利用できる**。描画は外部に出ず、ローカルの mbtiles + スタイル + フォント + sprite だけで完結する（OSM.jp 非依存は維持）。
 >
 > **前提と代償**:
-> - サーバ側描画は `@maplibre/maplibre-gl-native`（GLX/X11 + OpenGL 前提）を使う。**ヘッドレスサーバでは仮想 X ディスプレイ（Xvfb）が必須**で、無いと起動時に `Failed to open X display` で異常終了する。§9.6 の systemd ユニットが `xvfb-run` で起動する。
-> - フォントは**参照される全書体（§9.2 の 8 書体すべて）が揃っている必要がある**。1 つでも欠けるとラベル付きタイルが 500 になる（ベクター配信は寛容だが描画は厳格）。
-> - オンザフライ描画は CPU/メモリを消費する（数百 MB 〜）。ただし nginx が `.png` をキャッシュ（§9.7.5、7 日）するため 2 回目以降は軽い。
+> - サーバ側描画は `@maplibre/maplibre-gl-native`（GLX/X11 + OpenGL 前提）を使う。**ヘッドレスサーバでは仮想 X ディスプレイ（Xvfb）が必須**で、無いと起動時に `Failed to open X display` で異常終了する。§8.6 の systemd ユニットが `xvfb-run` で起動する。
+> - フォントは**参照される全書体（§8.2 の 8 書体すべて）が揃っている必要がある**。1 つでも欠けるとラベル付きタイルが 500 になる（ベクター配信は寛容だが描画は厳格）。
+> - オンザフライ描画は CPU/メモリを消費する（数百 MB 〜）。ただし nginx が `.png` をキャッシュ（§8.7.5、7 日）するため 2 回目以降は軽い。
 > - ラスターが不要でメモリを切り詰めたい場合は `data/tileserver-gl/config.json` の `serve_rendered` を `false` にする（Xvfb も不要になる）。
 
-### 9.6 systemd ユニット
+### 8.6 systemd ユニット
 
 tileserver-gl はループバック専用バインドとし、外部公開は後段の nginx に任せる (TLS 終端と CORS / キャッシュを nginx 側で一元管理するため)。
 
-> **`--public_url` 必須 (Host ヘッダ汚染対策)**: 本ユニットの `ExecStart` は `--public_url https://$DOMAIN/`（render で `deploy.env` の `DOMAIN` に置換）を渡す。これを付けないと tileserver-gl は `style.json` / TileJSON / sprite・glyph 参照に書き込む**絶対 URL をリクエストの `Host` / `X-Forwarded-Host` ヘッダから組み立てる**ため、生 IP への直接アクセス（あるいはヘッダ詐称）が来ると `https://<生IP>/data/...` を指す `style.json` が生成される。それをキャッシュしたブラウザは以後タイルを生 IP へ取りに行き、証明書 CN（`$DOMAIN`）と一致せず **`ERR_CERT_COMMON_NAME_INVALID`** で地図が出なくなる（ブラウザのサイトデータ削除で復旧するが再発する）。`--public_url` を付けると全 URL が常に正規ホスト名になり、tileserver-gl 起動時の `[SECURITY WARNING] Host header poisoning mitigation is NOT enabled` も消える。既に汚染 `style.json` が nginx / Cloudflare にキャッシュされている場合は §12 の手順で両方をパージすること。
+> **`--public_url` 必須 (Host ヘッダ汚染対策)**: 本ユニットの `ExecStart` は `--public_url https://$DOMAIN/`（render で `deploy.env` の `DOMAIN` に置換）を渡す。これを付けないと tileserver-gl は `style.json` / TileJSON / sprite・glyph 参照に書き込む**絶対 URL をリクエストの `Host` / `X-Forwarded-Host` ヘッダから組み立てる**ため、生 IP への直接アクセス（あるいはヘッダ詐称）が来ると `https://<生IP>/data/...` を指す `style.json` が生成される。それをキャッシュしたブラウザは以後タイルを生 IP へ取りに行き、証明書 CN（`$DOMAIN`）と一致せず **`ERR_CERT_COMMON_NAME_INVALID`** で地図が出なくなる（ブラウザのサイトデータ削除で復旧するが再発する）。`--public_url` を付けると全 URL が常に正規ホスト名になり、tileserver-gl 起動時の `[SECURITY WARNING] Host header poisoning mitigation is NOT enabled` も消える。既に汚染 `style.json` が nginx / Cloudflare にキャッシュされている場合は §11 の手順で両方をパージすること。
 >
-> **Xvfb 前提 (`serve_rendered: true` のため)**: 本ユニットの `ExecStart` は `serve_rendered: true`（§9.5）のサーバ側ラスター描画に必要な X ディスプレイを与えるため、tileserver-gl を `xvfb-run` で起動する（`Environment=LIBGL_ALWAYS_SOFTWARE=1` で Mesa ソフトウェア描画を強制）。入れずに `serve_rendered: true` のまま起動すると `Failed to open X display` で異常終了する。
+> **Xvfb 前提 (`serve_rendered: true` のため)**: 本ユニットの `ExecStart` は `serve_rendered: true`（§8.5）のサーバ側ラスター描画に必要な X ディスプレイを与えるため、tileserver-gl を `xvfb-run` で起動する（`Environment=LIBGL_ALWAYS_SOFTWARE=1` で Mesa ソフトウェア描画を強制）。入れずに `serve_rendered: true` のまま起動すると `Failed to open X display` で異常終了する。
+>
+> **[24.04]**
 >
 > ```bash
 > sudo apt install -y xvfb libgl1-mesa-dri
 > ```
 >
+> **[26.04]** Mesa のパッケージ構成が変わり `libgl1-mesa-dri` が存在しない、または中身の無い transitional パッケージになっている可能性がある。実際にロードされるライブラリを直接指定する:
+>
+> ```bash
+> sudo apt install -y xvfb libglx-mesa0 mesa-libgallium
+> # `libgl1-mesa-dri` が残っていれば追加しても害はない:
+> apt-cache policy libgl1-mesa-dri | head -3
+> ```
+>
 > - **`xvfb`** が必須（仮想 X ディスプレイ。依存で Mesa の GL スタックも入る）。
-> - 描画が実際にロードするソフトウェア GL は `libGLX_mesa.so`（`libglx-mesa0`）+ `libgallium*.so`（`mesa-libgallium`）で、通常は GL スタックと共に導入済み。最小構成のサーバで欠ける場合に備え、慣用的に **`libgl1-mesa-dri`** を併せて入れておくと確実（このパッケージ自体の DRI モジュールは GLX パスでは未ロードだが、Mesa ソフト GL 一式を揃える保険）。
+> - 描画が実際にロードするソフトウェア GL は `libGLX_mesa.so`（`libglx-mesa0`）+ `libgallium*.so`（`mesa-libgallium`）で、通常は GL スタックと共に導入済み。24.04 では最小構成のサーバで欠ける場合に備え、慣用的に **`libgl1-mesa-dri`** を併せて入れておくと確実（このパッケージ自体の DRI モジュールは GLX パスでは未ロードだが、Mesa ソフト GL 一式を揃える保険）。26.04 では上記 2 パッケージを直接指定することで同じ効果を得る。
+> - どちらの版でも、導入後に `ldconfig -p | grep -E 'libGLX_mesa|libgallium'` で両ライブラリが見えることを確認しておく。
 > - `mesa-utils`（`glxinfo`/`glxgears` の診断用）と `bumblebee`（NVIDIA Optimus 用）は **不要**。
 >
-> ラスターが不要なら `serve_rendered: false`（§9.5）にし、ユニットの `xvfb-run …` を素の `ExecStart=…/tileserver-gl …` に戻してもよい（その場合 Xvfb 不要）。
+> ラスターが不要なら `serve_rendered: false`（§8.5）にし、ユニットの `xvfb-run …` を素の `ExecStart=…/tileserver-gl …` に戻してもよい（その場合 Xvfb 不要）。
 
 render 出力の systemd ユニットを配置する:
 
@@ -1030,11 +982,11 @@ systemctl status tileserver-gl.service --no-pager
 ss -ltnp | grep 8080   # 127.0.0.1:8080 のみが listen
 ```
 
-### 9.7 nginx + certbot によるリバースプロキシ構築
+### 8.7 nginx + certbot によるリバースプロキシ構築
 
 **本構成では nginx リバースプロキシが必須**。外部アクセスは必ず `https://tile.hogehoge.com` 経由で nginx を通し、裏側の tileserver-gl はループバックでのみ応答する。
 
-#### 9.7.1 パッケージインストール
+#### 8.7.1 パッケージインストール
 
 ```bash
 sudo apt update
@@ -1044,7 +996,7 @@ sudo systemctl enable --now nginx
 
 `python3-certbot-nginx` プラグインを入れると、certbot が nginx 設定を自動編集して証明書配置と HTTP→HTTPS リダイレクトを組み立ててくれる。
 
-#### 9.7.1a nginx 実行ユーザをログインユーザに変更
+#### 8.7.1a nginx 実行ユーザをログインユーザに変更
 
 Ubuntu の apt nginx は既定で `www-data:www-data` で動作する。本構成ではキャッシュ・ログ・静的配信ツリーを全てデプロイユーザ (`$USER`、例: `foobar`) が所有するため、nginx ワーカーも同ユーザに降格させて権限問題を回避する。
 
@@ -1081,7 +1033,7 @@ ls -ld $HOME
 
 > **バインド権限**: TCP 80 / 443 は特権ポートだが、nginx の master プロセスは `root` で起動してから `user` ディレクティブで指定されたユーザにワーカーを降格するため、`foobar` でも問題なく listen できる。systemd unit の `ExecStart` も変更不要。
 
-#### 9.7.2 DNS と FW 事前条件
+#### 8.7.2 DNS と FW 事前条件
 
 - `tile.hogehoge.com` の A / AAAA レコードが本サーバのグローバル IP を指していること
 - TCP 80 / 443 が外部から到達可能であること (certbot の HTTP-01 challenge は 80 番を使用)
@@ -1094,7 +1046,7 @@ dig +short "$DOMAIN"
 curl -I "http://$DOMAIN/"  # nginx デフォルトページが見えれば OK
 ```
 
-#### 9.7.3 nginx 初期設定 (HTTP のみ)
+#### 8.7.3 nginx 初期設定 (HTTP のみ)
 
 certbot を走らせる前に、server_name が正しく認識されるよう最低限の HTTP 設定を置く。render-configs.sh で `staging/etc/nginx/sites-available/$DOMAIN.http-only` が出力される (§3.1)。これを `$DOMAIN` という名前で配置する (`.http-only` サフィックスは付けない):
 
@@ -1110,7 +1062,7 @@ sudo rm -f /etc/nginx/sites-enabled/default
 sudo nginx -t && sudo systemctl reload nginx
 ```
 
-#### 9.7.4 SSL 証明書取得 (Let's Encrypt)
+#### 8.7.4 SSL 証明書取得 (Let's Encrypt)
 
 ```bash
 . "$REPO/deploy.env"   # $DOMAIN, $ADMIN_EMAIL を読み込む
@@ -1137,16 +1089,24 @@ systemctl list-timers | grep certbot
 sudo certbot renew --dry-run
 ```
 
-#### 9.7.5 nginx 本設定 (リバースプロキシ + キャッシュ + CORS)
+#### 8.7.5 nginx 本設定 (リバースプロキシ + キャッシュ + CORS)
 
-certbot 実行後、render 出力の `staging/etc/nginx/sites-available/$DOMAIN` で同名ファイルを上書きする。この設定には HTTP→HTTPS リダイレクト、proxy_cache (`/var/cache/nginx/tiles`、20 GB / 7 日)、CORS、`/demo.html` の nginx 直接配信 (§10.3) がすべて含まれる。
+certbot 実行後、render 出力の `staging/etc/nginx/sites-available/$DOMAIN` で同名ファイルを上書きする。この設定には HTTP→HTTPS リダイレクト、proxy_cache (`/var/cache/nginx/tiles`、20 GB / 7 日)、CORS、`/demo.html` の nginx 直接配信 (§9.3) がすべて含まれる。
+
+テンプレートは HTTP/2 を `listen 443 ssl http2;` (listen 行オプション) で有効化している。これは両 OS で動作するが、nginx の版数で扱いが異なる:
+
+- **[24.04]** nginx 1.24.0。単独ディレクティブ `http2 on;` は 1.25.1 以降にしか無いため、listen 行オプション**のみが使える**。テンプレートのまま配置する。
+- **[26.04]** nginx 1.26 以降。listen 行オプションは deprecated となり `nginx -t` / 起動時に `the "listen ... http2" directive is deprecated, use the "http2" directive instead` の**警告**が出る (動作はする)。警告を消すには、配置前に staging 側のファイルを `http2 on;` 形式へ変換する (下記ブロック内の `[26.04]` 2 行)。`render-configs.sh` を再実行すると staging は listen 行形式に戻るので、再配置のたびに変換も再実行すること (変換は冪等)。
 
 ```bash
 . "$REPO/deploy.env"   # $DOMAIN, $USER_NAME を読み込む
+F="$REPO/staging/etc/nginx/sites-available/$DOMAIN"
 
-sudo install -m 0644 -o root -g root \
-    "$REPO/staging/etc/nginx/sites-available/$DOMAIN" \
-    "/etc/nginx/sites-available/$DOMAIN"
+# [26.04] のみ: listen 行の http2 オプションを `http2 on;` ディレクティブに変換
+sed -i -E 's/^(\s*listen .*) http2;$/\1;/' "$F"
+grep -qE '^\s*http2 on;' "$F" || sed -i -E '0,/^\s*listen \[::\]:443 ssl;$/s//&\n    http2 on;/' "$F"
+
+sudo install -m 0644 -o root -g root "$F" "/etc/nginx/sites-available/$DOMAIN"
 
 sudo mkdir -p /var/cache/nginx/tiles
 sudo chown -R "$USER_NAME:$USER_NAME" /var/cache/nginx/tiles
@@ -1154,9 +1114,9 @@ sudo chown -R "$USER_NAME:$USER_NAME" /var/cache/nginx/tiles
 sudo nginx -t && sudo systemctl reload nginx
 ```
 
-> **certbot が自動編集した内容との関係**: `certbot --nginx` (§9.7.4) は §9.7.3 で配置した HTTP-only 設定に SSL ディレクティブを追記するが、本ステップでは設定ファイル全体を本リポジトリ版で**上書き**する。本リポジトリ版には `ssl_certificate` / `ssl_certificate_key` / `include /etc/letsencrypt/options-ssl-nginx.conf;` / `ssl_dhparam` が直書きされているため、certbot の編集結果は失われても問題ない。証明書ファイル自体は `/etc/letsencrypt/live/tile.hogehoge.com/` に残っており、設定が参照する。
+> **certbot が自動編集した内容との関係**: `certbot --nginx` (§8.7.4) は §8.7.3 で配置した HTTP-only 設定に SSL ディレクティブを追記するが、本ステップでは設定ファイル全体を本リポジトリ版で**上書き**する。本リポジトリ版には `ssl_certificate` / `ssl_certificate_key` / `include /etc/letsencrypt/options-ssl-nginx.conf;` / `ssl_dhparam` が直書きされているため、certbot の編集結果は失われても問題ない。証明書ファイル自体は `/etc/letsencrypt/live/tile.hogehoge.com/` に残っており、設定が参照する。
 
-#### 9.7.6 疎通確認
+#### 8.7.6 疎通確認
 
 ```bash
 . "$REPO/deploy.env"   # $DOMAIN を読み込む
@@ -1178,7 +1138,7 @@ curl -s -o /dev/null -D - "https://$DOMAIN/data/openmaptiles/10/897/407.pbf" | g
 curl -s -o /dev/null -D - "https://$DOMAIN/data/openmaptiles/10/897/407.pbf" | grep -i x-cache
 ```
 
-#### 9.7.7 証明書更新時の nginx リロード
+#### 8.7.7 証明書更新時の nginx リロード
 
 certbot は更新成功時に `/etc/letsencrypt/renewal-hooks/deploy/` 配下のスクリプトを実行する。本リポジトリ収録の `etc/letsencrypt/renewal-hooks/deploy/reload-nginx.sh` を配置する:
 
@@ -1188,9 +1148,9 @@ sudo install -m 0755 -o root -g root \
     /etc/letsencrypt/renewal-hooks/deploy/reload-nginx.sh
 ```
 
-#### 9.7.8 スタイル内部 URL の確認
+#### 8.7.8 スタイル内部 URL の確認
 
-§9.3 で `sprite` / `glyphs` は**ローカル相対パス**で書かれており (on-disk はドメイン非依存)、絶対 URL 化は tileserver-gl が配信時にリクエストの `Host` / `X-Forwarded-Proto` から行う。したがって確認は **nginx 経由で配信される** style.json に対して行う (on-disk ファイルを直接見ても相対パスのままで正しい)。
+§8.3 で `sprite` / `glyphs` は**ローカル相対パス**で書かれており (on-disk はドメイン非依存)、絶対 URL 化は tileserver-gl が配信時にリクエストの `Host` / `X-Forwarded-Proto` から行う。したがって確認は **nginx 経由で配信される** style.json に対して行う (on-disk ファイルを直接見ても相対パスのままで正しい)。
 
 ```bash
 . "$REPO/deploy.env"   # $DOMAIN を読み込む
@@ -1211,13 +1171,13 @@ done
 }
 ```
 
-絶対 URL に展開されない場合は §9.7.5 の nginx 設定で `proxy_set_header Host $host;` と `proxy_set_header X-Forwarded-Proto https;` が両 `location` に入っているか確認する。`sprite` がローカル相対パスでなく絶対 http URL になっている (= sprite が `400` になる) 場合は §9.3 の patch_style.py を再実行し、`sudo systemctl restart tileserver-gl` を実施する (§12 の sprite 400 の項も参照)。
+絶対 URL に展開されない場合は §8.7.5 の nginx 設定で `proxy_set_header Host $host;` と `proxy_set_header X-Forwarded-Proto https;` が両 `location` に入っているか確認する。`sprite` がローカル相対パスでなく絶対 http URL になっている (= sprite が `400` になる) 場合は §8.3 の patch_style.py を再実行し、`sudo systemctl restart tileserver-gl` を実施する (§11 の sprite 400 の項も参照)。
 
 ---
 
-## 10. 動作確認
+## 9. 動作確認
 
-### 10.1 エンドポイントの疎通
+### 9.1 エンドポイントの疎通
 
 まずループバック側 (tileserver-gl 直接) で疎通、次に公開側 (nginx 経由 HTTPS) で疎通を確認する。
 
@@ -1228,7 +1188,7 @@ done
 for STYLE in maptiler-toner-en maptiler-basic-en; do
     echo "=== ${STYLE} ==="
     curl -s http://127.0.0.1:8080/styles/${STYLE}/style.json | jq '.sources | keys'
-    # -> ["openmaptiles"]  だけが含まれ、hoppo/takeshima が無いこと
+    # -> ["openmaptiles"]
 done
 
 curl -s http://127.0.0.1:8080/data/openmaptiles.json | jq '.vector_layers[].id'
@@ -1244,21 +1204,26 @@ curl -sI "https://$DOMAIN/data/openmaptiles/10/897/407.pbf"
 # -> HTTP/2 200
 ```
 
-### 10.2 島嶼領域が空であることの確認
+### 9.2 島嶼領域に地物はあるがラベル属性が無いことの確認
+
+§1.3 のとおり島内の地物は残り、`name` 系の属性だけが落ちている。MVT はレイヤーごとに属性キー名を平文で保持するため、タイルに `name` / `name:*` キーが現れないことで確認できる:
 
 ```bash
 . "$REPO/deploy.env"   # $DOMAIN を読み込む
 
-# 択捉島中心付近の z=12 タイルが空であることを確認
-# tile coord ≈ (3641, 1472) at z=12 for (148.0, 44.5)
-curl -s "https://$DOMAIN/data/openmaptiles/12/3641/1472.pbf" -o /tmp/t.pbf
-file /tmp/t.pbf && wc -c /tmp/t.pbf
-# 極小サイズ (数百 bytes 以下) または空タイル
+# 国後島 (古釜布付近) の z=12 タイル。tile coord = (3707, 1488) at z=12 for (145.86, 44.03)
+curl -s --compressed "https://$DOMAIN/data/openmaptiles/12/3707/1488.pbf" -o /tmp/t.pbf
+wc -c /tmp/t.pbf                                   # 数 KB〜数十 KB (地物あり)
+strings -n 4 /tmp/t.pbf | grep -E '^(landuse|transportation|water|waterway|building)$' | sort -u
+                                                   # -> 地物レイヤー名が並ぶ
+strings -n 4 /tmp/t.pbf | grep -cE '^name(:|$)'    # -> 0 (name 系キーが無い)
 ```
 
-### 10.2.1 境界線中立化パッチが有効であることの確認
+対照として本土のタイル (例: `10/909/403`、東京) では最後のコマンドが正の値になる。
 
-§9.3 の `patch_style.py` が正しく適用され、以下が成立していることを確認する。処理の論理順に沿って確認 (A)→(B)→(C)→(D)→(E)→(F) で進める。
+### 9.2.1 境界線中立化パッチが有効であることの確認
+
+§8.3 の `patch_style.py` が正しく適用され、以下が成立していることを確認する。処理の論理順に沿って確認 (A)→(B)→(C)→(D)→(E)→(F) で進める。
 
 **(A) admin_level=2 専用レイヤーが削除されている (§1.2.2)**
 
@@ -1334,7 +1299,7 @@ done
 
 両スタイルで `boundary < water < transportation` (= `OK`) であれば、海上の境界線は water で被覆されて非表示、海上の橋等は可視。なお on-disk ではなく配信側 (`curl https://$DOMAIN/styles/.../style.json`) で見ても順序は同じ。
 
-**(F) ラベルが `name:en` 優先で描画される (§1.1 / §9.3 手順 5)**
+**(F) ラベルが `name:en` 優先で描画される (§1.1 / §8.3 手順 2)**
 
 すべての `text-field` が `["coalesce", ["get","name:en"], ["get","name:latin"]]` に書き換わっており、`{name:latin}` 単独参照や `{name:nonlatin}` 併記が残っていないことを確認する。これが崩れていると、元の `name` が Latin の国 (グリーンランド `Kalaallit Nunaat` 等) が現地語のまま出る。
 
@@ -1354,9 +1319,9 @@ done
 
 `bare {name:*}=0` かつ `name:nonlatin 残存=0` かつ `name:en 参照>0` (= `OK`) であればよい。`{housenumber}` は name を含まないためこの検査に掛からず、書き換え対象外のまま残る (正しい挙動)。
 
-### 10.3 ブラウザでの表示確認
+### 9.3 ブラウザでの表示確認
 
-デモページは tileserver-gl の配信下ではなく、**nginx が静的ファイルとして直接配信**する場所 (§2.2 で作成済み) に置く。これにより、tileserver-gl が落ちていてもデモは到達可能。`/demo.html` の location ブロックは §9.7.5 の nginx 設定にすでに含まれているため、本節では HTML ファイルの配置のみで足りる。
+デモページは tileserver-gl の配信下ではなく、**nginx が静的ファイルとして直接配信**する場所 (§2.2 で作成済み) に置く。これにより、tileserver-gl が落ちていてもデモは到達可能。`/demo.html` の location ブロックは §8.7.5 の nginx 設定にすでに含まれているため、本節では HTML ファイルの配置のみで足りる。
 
 ```bash
 . "$REPO/deploy.env"   # $USER_NAME, $HTTP_ROOT を読み込む
@@ -1390,24 +1355,24 @@ install -m 0644 -o "$USER_NAME" -g "$USER_NAME" \
 | Maptiler-Toner-en | 白 (`#fff`) | 黒 | 黒系の破線 (高コントラスト) |
 | Maptiler-Basic-en | 薄ベージュ (`hsl(47,26%,88%)`) | 水色 (`hsl(205,56%,73%)`) | 中間グレー半透明の破線 (`hsla(0,0%,60%,0.5)`) |
 
-島嶼の地色 (land 塗り) が背景色である点は両スタイル共通で、その上に無名の河川・道路・地形が描かれる (§1.3)。島の存在ごと完全に海と同化させたい場合は §12.1 参照。
+島嶼の地色 (land 塗り) が背景色である点は両スタイル共通で、その上に無名の河川・道路・地形が描かれる (§1.3)。島の存在ごと完全に海と同化させたい場合は §11.1 参照。
 
 ---
 
-## 11. 運用: 定期更新
+## 10. 運用: 定期更新
 
-OSM 本体は日々更新されるが、本サーバは情報の最新性より運用負荷の軽さを優先し、**年次 (1 月 1 日)** に完全リビルドを行う。ビルド所要は数時間オーダーで、その間 47 分の PBF クリップ + 数時間の Planetiler + 配信切替という構成のため、低頻度のバッチ運用が合理的。島嶼ポリゴン (`$REPO/geojson/`) は初回セットアップ時に手元に取得済み (§5)、以降は年次 rebuild で再利用するのみで OSM.jp は年次ループに登場しない (§1.4 参照)。ビルド処理は `$USER_NAME` 権限で実施し、MBTiles の置換と tileserver-gl の再起動、および nginx キャッシュ破棄のみ特権操作とする。
+OSM 本体は日々更新されるが、本サーバは情報の最新性より運用負荷の軽さを優先し、**年次 (1 月 1 日)** に完全リビルドを行う。ビルド所要は数時間オーダーで、その間 47 分の PBF クリップ + 数時間の Planetiler + 配信切替という構成のため、低頻度のバッチ運用が合理的。ビルド処理は `$USER_NAME` 権限で実施し、MBTiles の置換と tileserver-gl の再起動、および nginx キャッシュ破棄のみ特権操作とする。
 
-### 11.1 リビルドスクリプト本体
+### 10.1 リビルドスクリプト本体
 
 リポジトリ内の `scripts/rebuild.sh` を使用する。インストール不要 (systemd サービスがリポジトリ内のパスを直接指す)。スクリプトは以下を順に実行する:
 
 0. **`$REPO/deploy.env` を `source`** して `USER_NAME` / `BUILD_ROOT` / `TILESERVER_DATA` 等を読み込む。`REPO` はスクリプト自身の配置パスから自動算出 (環境変数で上書き可)
 1. `planet.osm.pbf` を最新版で更新 (`wget -N`)。取得元は**国内ミラー `planet.passportcontrol.net` を優先し、不通なら本家 `planet.openstreetmap.org` にフォールバック**(`PLANET_URL` / `PLANET_URL_FALLBACK` で上書き可)。**`SKIP_PLANET_DOWNLOAD=1` を付けるとこの再ダウンロードを省略**し、既存の `pbf/global.osm.pbf` で再ビルドする(パイプライン変更だけを ~80GB の再取得なしで再適用したい場合に使う)
-2. `buffer_clip.py` を**明示座標** (`--polygon` で北方領土、`--bbox` で竹島・尖閣) で実行 → `world_minus_islands.poly` + `islands_buffered.geojson` を再生成 (毎回実行、ローカル計算のみ、所要数秒、OSM.jp 非依存)
-3. `osmium extract -p` で本体を島嶼 +2 km 抜きでクリップ
-3.5. `residual_label_ids.py` + `osmium removeid` で、smart strategy が relation 完結性維持のため巻き込んだ名前付き/ラベル/POI feature を除去 (§7.1)
-3.6. 島域を別抽出 → `strip_island_labels.py` で文字タグ除去 → `osmium merge` で本体へ戻す (島は地物のまま無名化。§7.2 / §1.3)
+2. `buffer_clip.py` を経緯度座標 (`--polygon` で北方領土、`--bbox` で竹島・尖閣) で実行 → `world_minus_islands.poly` + `islands_buffered.geojson` を再生成 (毎回実行、所要数秒)
+3. `osmium extract -p` で本体を島嶼抜きでクリップ
+3.5. `residual_label_ids.py` + `osmium removeid` で、smart strategy が relation 完結性維持のため巻き込んだ名前付き/ラベル/POI feature を除去 (§6.1)
+3.6. 島域を別抽出 → `strip_island_labels.py` で文字タグ除去 → `osmium merge` で本体へ戻す (島は地物のまま無名化。§6.2 / §1.3)
 4. Planetiler で全球ビルド (出力先は仮名 `final.new.mbtiles`)
 5. **クロスファイルシステム対応のアトミック置換**: ビルド成果物をいったん配信ディスクに `cp` してから同一 FS 内で `mv` rename
 6. `sudo systemctl restart tileserver-gl.service` で SQLite ハンドルをリフレッシュ
@@ -1417,9 +1382,7 @@ OSM 本体は日々更新されるが、本サーバは情報の最新性より�
 
 ハードコードされたパスは存在しない: 全て `deploy.env` 経由で解決される。`scripts/rebuild.sh` は render 対象外 (staging/ には現れない) — `deploy.env` を実行時に source する設計のため。
 
-> **(2) は OSM.jp を叩かない**: 係争地の領域は明示座標で定義する (§6)。`fetch_osmjp.py` / `geojson/` は legacy で年次ループには登場しない (§1.4)。
-
-### 11.2 sudoers で必要最小限の特権を付与
+### 10.2 sudoers で必要最小限の特権を付与
 
 rebuild.sh が叩く 3 コマンドだけをパスワード無しで実行可能にする。本リポジトリ収録の `etc/sudoers.d/tileserver-rebuild` を配置:
 
@@ -1430,7 +1393,7 @@ sudo install -m 0440 -o root -g root \
 sudo visudo -c -f /etc/sudoers.d/tileserver-rebuild   # 構文検査
 ```
 
-### 11.3 systemd service / timer
+### 10.3 systemd service / timer
 
 本リポジトリ収録の `etc/systemd/system/tileserver-rebuild.{service,timer}` を配置:
 
@@ -1451,40 +1414,43 @@ sudo systemctl enable --now tileserver-rebuild.timer
 
 ---
 
-## 12. トラブルシューティング
+## 11. トラブルシューティング
 
 | 症状 | 対処 |
 |---|---|
 | Planetiler が OOM | `-Xmx` を下げて `--storage=mmap --nodemap-storage=mmap --nodemap-type=array` を追加 |
 | osmium が `.poly` を拒否 | `head -20 build/world_minus_islands.poly` でフォーマット確認 (1 行目:名前、2 行目:外周名、`END` 3 連、`!hole_N` で穴) |
 | 島のシルエットが表示されない | 水域ポリゴンが誤って島域にかぶっている可能性。Planetiler を `--download` 付きで再実行し、land-polygons-split-3857.zip が取得されたか確認 |
-| 島のエリアが黒で埋まる | OSM coastline が Hoppo/Takeshima を land として主張している想定と一致しない。黒塗りにしたい場合は §12.1 |
-| 島内に道路・建物が残る | `§7.1` の tags-filter + removeid 二重除去を実施 |
+| 島のエリアが黒で埋まる | OSM coastline が Hoppo/Takeshima を land として主張している想定と一致しない。黒塗りにしたい場合は §11.1 |
+| 島内に道路・建物が残る | `§6.1` の tags-filter + removeid 二重除去を実施 |
 | タイルは出るが真っ白 | sprite / fonts が 404/400。tileserver-gl の起動ログと `curl http://127.0.0.1:8080/fonts/Noto%20Sans%20Regular/0-255.pbf` を確認 |
-| `/styles/<id>/sprite.json` が `400 Bad Sprite ID or Scale` | style.json の `sprite` が**絶対 http URL になっている**。tileserver-gl 5.x は絶対 URL の sprite を自前配信登録しない。§9.3 の `patch_style.py` を再実行して `sprite` をローカル相対パス (`<id>/sprite`) に戻し、`sudo systemctl restart tileserver-gl` → nginx キャッシュをパージ (`find /var/cache/nginx/tiles -mindepth 1 -delete`) |
+| `/styles/<id>/sprite.json` が `400 Bad Sprite ID or Scale` | style.json の `sprite` が**絶対 http URL になっている**。tileserver-gl 5.x は絶対 URL の sprite を自前配信登録しない。§8.3 の `patch_style.py` を再実行して `sprite` をローカル相対パス (`<id>/sprite`) に戻し、`sudo systemctl restart tileserver-gl` → nginx キャッシュをパージ (`find /var/cache/nginx/tiles -mindepth 1 -delete`) |
 | `name:latin` が空でラベルが出ない | Planetiler で `--languages=en` を指定していない。再ビルド必要 |
-| 非 Latin 名 (日本語等) のラベルが不自然に音訳された文字で出る | `--transliterate=false` を指定していない。指定すると `name:en` 等の Latin 名が無い場合にラベル自体が描画されなくなる (§8 参照) |
-| ラベルが現地語のまま (グリーンランド `Kalaallit Nunaat`、ドイツ `Deutschland` 等) | 元の `name` が既に Latin だと planetiler はそれを `name:latin` に残すため `name:latin ≠ name:en`。text-field が `name:latin` 単独参照だと現地名が出る。§9.3 手順 5 の `["coalesce", ["get","name:en"], ["get","name:latin"]]` 書き換えが効いているか (§10.2.1 D / 下記コマンド) 確認し、未適用なら `patch_style.py` を再実行 → tileserver-gl 再起動 → nginx/Cloudflare キャッシュパージ |
+| 非 Latin 名 (日本語等) のラベルが不自然に音訳された文字で出る | `--transliterate=false` を指定していない。指定すると `name:en` 等の Latin 名が無い場合にラベル自体が描画されなくなる (§7 参照) |
+| ラベルが現地語のまま (グリーンランド `Kalaallit Nunaat`、ドイツ `Deutschland` 等) | 元の `name` が既に Latin だと planetiler はそれを `name:latin` に残すため `name:latin ≠ name:en`。text-field が `name:latin` 単独参照だと現地名が出る。§8.3 手順 2 の `["coalesce", ["get","name:en"], ["get","name:latin"]]` 書き換えが効いているか (§9.2.1 D / 下記コマンド) 確認し、未適用なら `patch_style.py` を再実行 → tileserver-gl 再起動 → nginx/Cloudflare キャッシュパージ |
 | ラベルがそれ以外の言語 | `name:en` も `name:latin` も無く OSM 側タグに依存。OSM で `name:en` が付けば次回リビルドで反映 |
-| ブラウザで Mixed Content | 配信 style.json の `sprite` / `glyphs` が `http://` で返っている。tileserver-gl は `X-Forwarded-Proto` から scheme を決めるため、§9.7.5 の nginx 設定で `proxy_set_header X-Forwarded-Proto https;` が両 `location` に入っているか確認 (§9.7.8) |
-| 海上の境界線が見える (海峡の県境、根室↔北方領土間など) | **§10.2.1 (E)** で `boundary < water < transportation` の順序を確認。崩れていれば §9.3 の patch_style.py を再実行 (`mask_sea_boundaries()` が water を boundary の上へ移動する)。再実行後は **tileserver-gl 再起動 + nginx キャッシュパージ** (`find /var/cache/nginx/tiles -mindepth 1 -delete`) が必要。注: `maritime!=1` フィルター (§10.2.1 C) だけでは `maritime=0` の海峡県境は消えない — 消すのは water 被覆 (§1.2.5) |
-| 海上の橋・トンネルまで消えてしまった | `transportation` が water マスクの下にある。**§10.2.1 (E)** で `transportation 最小 idx > water idx` を確認。NG なら patch_style.py を再実行 (`mask_sea_boundaries()` が transportation を持ち上げる) |
-| 陸上国境線が他の行政区画より太い/目立つ線で描画される | `admin_country_*` / `boundary_country_*` レイヤーが削除されていない。**§10.2.1 (A)** のコマンドで確認し、残っていれば §9.3 の patch_style.py を再実行 |
-| 陸上国境が描画されない (消えている) | `admin_sub` / `boundary_state` のフィルター拡張が効いていない。**§10.2.1 (B)** で admin_level 条件に 2, 3, 4 がすべて含まれているか確認 |
-| 低ズームで何も描画されない (国名すら出ない) | **§10.2.1 (D)** で国名ラベルの `maxzoom` が 5 に制限されているが、対応する symbol レイヤー自体が元スタイルから欠落している可能性。OSM.jp からの style.json 再取得を行ってから patch_style.py を再実行 |
-| 拡大しても国が区別できない | **これは仕様** (§1.2.2)。陸上国境も県境と同一スタイルで描画される。国の形を示したい場合は §9.3 patch_style.py から `neutralize_country_boundaries()` の呼び出しをコメントアウトして再実行 |
+| ブラウザで Mixed Content | 配信 style.json の `sprite` / `glyphs` が `http://` で返っている。tileserver-gl は `X-Forwarded-Proto` から scheme を決めるため、§8.7.5 の nginx 設定で `proxy_set_header X-Forwarded-Proto https;` が両 `location` に入っているか確認 (§8.7.8) |
+| 海上の境界線が見える (海峡の県境、根室↔北方領土間など) | **§9.2.1 (E)** で `boundary < water < transportation` の順序を確認。崩れていれば §8.3 の patch_style.py を再実行 (`mask_sea_boundaries()` が water を boundary の上へ移動する)。再実行後は **tileserver-gl 再起動 + nginx キャッシュパージ** (`find /var/cache/nginx/tiles -mindepth 1 -delete`) が必要。注: `maritime!=1` フィルター (§9.2.1 C) だけでは `maritime=0` の海峡県境は消えない — 消すのは water 被覆 (§1.2.5) |
+| 海上の橋・トンネルまで消えてしまった | `transportation` が water マスクの下にある。**§9.2.1 (E)** で `transportation 最小 idx > water idx` を確認。NG なら patch_style.py を再実行 (`mask_sea_boundaries()` が transportation を持ち上げる) |
+| 陸上国境線が他の行政区画より太い/目立つ線で描画される | `admin_country_*` / `boundary_country_*` レイヤーが削除されていない。**§9.2.1 (A)** のコマンドで確認し、残っていれば §8.3 の patch_style.py を再実行 |
+| 陸上国境が描画されない (消えている) | `admin_sub` / `boundary_state` のフィルター拡張が効いていない。**§9.2.1 (B)** で admin_level 条件に 2, 3, 4 がすべて含まれているか確認 |
+| 低ズームで何も描画されない (国名すら出ない) | **§9.2.1 (D)** で国名ラベルの `maxzoom` が 5 に制限されているが、対応する symbol レイヤー自体が元スタイルから欠落している可能性。OSM.jp からの style.json 再取得を行ってから patch_style.py を再実行 |
+| 拡大しても国が区別できない | **これは仕様** (§1.2.2)。陸上国境も県境と同一スタイルで描画される。国の形を示したい場合は §8.3 patch_style.py から `neutralize_country_boundaries()` の呼び出しをコメントアウトして再実行 |
 | `certbot --nginx` 失敗 (HTTP-01 unauthorized) | 80 番への外部到達性と DNS A レコードを確認 (`dig "$DOMAIN"`、`curl -I "http://$DOMAIN/.well-known/acme-challenge/test"`)。IPv6 AAAA が古い IP を指している場合も失敗する |
-| certbot 自動更新が失敗する | `sudo journalctl -u certbot.timer -e` と `sudo certbot renew --dry-run` を確認。更新成功時に nginx reload が走らない場合は §9.7.7 のフックを確認 |
-| リビルド後も古いタイルが返る | nginx `proxy_cache` の残留。§11 の rebuild.sh (6)(7) で `/var/cache/nginx/tiles` が削除されているか確認 |
+| certbot 自動更新が失敗する | `sudo journalctl -u certbot.timer -e` と `sudo certbot renew --dry-run` を確認。更新成功時に nginx reload が走らない場合は §8.7.7 のフックを確認 |
+| リビルド後も古いタイルが返る | nginx `proxy_cache` の残留。§10 の rebuild.sh (6)(7) で `/var/cache/nginx/tiles` が削除されているか確認 |
 | 502 Bad Gateway | tileserver-gl が `127.0.0.1:8080` で待ち受けていない。`ss -ltnp | grep 8080` と `journalctl -u tileserver-gl -e` を確認 |
-| tileserver-gl が起動直後にクラッシュ (`Failed to open X display` / core-dump) | `serve_rendered: true` のサーバ側描画に X ディスプレイが無い。`sudo apt install -y xvfb libgl1-mesa-dri` し、systemd ユニットが `xvfb-run …` で起動しているか確認 (§9.6)。ラスター不要なら `serve_rendered: false` に戻す (§9.5) |
-| ラスター PNG だけ 500 (ベクター/style.json は正常)、ログに `Failed to load glyph range ... Invalid range` | ①参照フォント不足: §9.2 の 8 書体すべてが `data/fonts/` にあるか確認 (特に `Nunito Regular` / `Nunito Bold`)。`build_fonts.sh` を再実行し tileserver-gl 再起動。②glyphs パス不正: style.json の `glyphs` が `{fontstack}/{range}.pbf` (先頭 `fonts/` 無し) か確認。`fonts/` が付くと描画で二重 `fonts/` になり 500 (§9.3 項目 10)。`patch_style.py` 再実行 |
-| ラスター XYZ URL が 404 (`/styles/{id}/{z}/{x}/{y}.png`) | `serve_rendered: false` のまま。§9.5 で `true` にし、Xvfb を整えて (§9.6) 再起動 |
-| nginx 起動に失敗 (Permission denied) | §9.7.1a の `user foobar foobar;` 変更後に `/var/log/nginx` のオーナーが foobar になっていない。`sudo chown -R foobar:foobar /var/log/nginx` |
+| tileserver-gl が起動直後にクラッシュ (`Failed to open X display` / core-dump) | `serve_rendered: true` のサーバ側描画に X ディスプレイが無い。`xvfb` + Mesa ソフト GL (24.04: `libgl1-mesa-dri` / 26.04: `libglx-mesa0 mesa-libgallium`) を入れ、systemd ユニットが `xvfb-run …` で起動しているか確認 (§8.6)。ラスター不要なら `serve_rendered: false` に戻す (§8.5) |
+| tileserver-gl 起動時に `libpng warning: Application built with libpng-1.6.37 but running with 1.6.xx` → abort | `canvas` が prebuild バイナリのまま (24.04 / 26.04 共通)。§3 の `npm rebuild canvas --build-from-source` を再実行し、`.npmrc` に `build_from_source=true` を置いて再発を防ぐ |
+| `nginx -t` で `the "listen ... http2" directive is deprecated` 警告 | **[26.04]** nginx 1.26 以降でテンプレートの listen 行形式を使っている。動作に支障は無い。消したければ §8.7.5 の `[26.04]` 変換 (`http2 on;` 化) を staging に適用して再配置 |
+| `nginx -t` で `unknown directive "http2"` エラー | **[24.04]** nginx 1.24.0 に `http2 on;` は無い。§8.7.5 の `[26.04]` 変換を 24.04 で適用してしまっている。`render-configs.sh` で staging を再生成し、変換せずに配置する |
+| ラスター PNG だけ 500 (ベクター/style.json は正常)、ログに `Failed to load glyph range ... Invalid range` | ①参照フォント不足: §8.2 の 8 書体すべてが `data/fonts/` にあるか確認 (特に `Nunito Regular` / `Nunito Bold`)。`build_fonts.sh` を再実行し tileserver-gl 再起動。②glyphs パス不正: style.json の `glyphs` が `{fontstack}/{range}.pbf` (先頭 `fonts/` 無し) か確認。`fonts/` が付くと描画で二重 `fonts/` になり 500 (§8.3 項目 10)。`patch_style.py` 再実行 |
+| ラスター XYZ URL が 404 (`/styles/{id}/{z}/{x}/{y}.png`) | `serve_rendered: false` のまま。§8.5 で `true` にし、Xvfb を整えて (§8.6) 再起動 |
+| nginx 起動に失敗 (Permission denied) | §8.7.1a の `user foobar foobar;` 変更後に `/var/log/nginx` のオーナーが foobar になっていない。`sudo chown -R foobar:foobar /var/log/nginx` |
 | nginx のログが書き込めない | logrotate で再生成されたログが古いオーナーになっている。`/etc/logrotate.d/nginx` の `create` 行が `foobar adm` を指しているか確認 |
 | デモページが 403 Forbidden | nginx ワーカーが foobar になっているか確認 (`ps -eo user,pid,cmd \| grep 'nginx:'`)。また `/home/foobar` のパーミッションが `755` 以上で nginx ワーカーから辿れるか確認 |
 
-### 12.1 島を「海と同化」として扱いたい場合
+### 11.1 島を「海と同化」として扱いたい場合
 
 §1.3 の文字除去後も、島は陸地ポリゴン(背景色)+ 無名の地物(河川・道路等)として海の中に描かれる。島の存在ごと完全に海と同化させたい場合は、スタイルに海色のマスクレイヤーを追加して島を塗り潰す。両スタイルで海の色が異なるため、スタイルごとに色を変える必要がある (Toner-en は黒、Basic-en は水色)。
 
@@ -1504,15 +1470,15 @@ sudo find /var/cache/nginx/tiles -type f -delete
 sudo systemctl reload nginx
 ```
 
-この手法はバッファ済み 2km 領域そのものを海と同色で塗るため、島と周辺 2km の海が同色で一体化し、視覚的に「島が消えた」状態になる。両スタイルで同時に適用される。
+この手法は §5 の領域全体を海と同色で塗るため、島と周辺の海が同色で一体化し、視覚的に「島が消えた」状態になる。両スタイルで同時に適用される。
 
 ---
 
-## 13. ライセンス・帰属
+## 12. ライセンス・帰属
 
-成果物ごとに適用ライセンスが異なる。配信される地図と、本リポジトリ内に置かれる中間データを混同しないこと。
+成果物ごとに適用ライセンスが異なる。
 
-### 13.1 成果物別の適用ライセンス
+### 12.1 成果物別の適用ライセンス
 
 | 成果物 | 適用ライセンス | 必要な帰属表記 |
 |---|---|---|
@@ -1521,27 +1487,8 @@ sudo systemctl reload nginx
 | 配信スタイル (`styles/maptiler-basic-en/style.json`) | **BSD 3-Clause** (code) + **CC-BY 4.0** (design)。design 由来は Mapbox Open Styles | `© OpenMapTiles` + `© OpenStreetMap contributors` のみ (MapTiler 表記不要) |
 | 配信 sprite (`sprites/maptiler-{toner,basic}-en/`) | 各 style.json と同一 | 各 style.json と同一 |
 | フォント (`fonts/Noto Sans*`、`fonts/Nunito*`) | **SIL Open Font License (OFL) 1.1** | フォント自体の OFL 表記 (再配布時に同梱) |
-| 操作者が手元で fetch した `$REPO/geojson/{hoppo,takeshima}.geojson` | **CC-BY-SA 2.0** (OSMFJ タイル由来) + **ODbL 1.0** (上流 OSM) | `geojson/README.md` および `geojson/LICENSE` 記載のとおり。**本リポジトリには同梱しない** (`.gitignore`) ため、共有義務は操作者がそれらのファイルを再配布した場合にのみ発生 |
 
-### 13.2 share-alike (CC-BY-SA 2.0) の伝播は操作者の `geojson/` 内に限定される
-
-本構成では、CC-BY-SA 2.0 (= OSM.jp タイルライセンス) のシェアアライク義務を負うのは**操作者が `scripts/fetch_osmjp.py` で fetch した手元の `$REPO/geojson/` 配下のファイルのみ**。配信される地図 (タイル + スタイル + sprite + フォント) にも、**本リポジトリの配布物にも一切伝播しない**。理由は以下の 3 点:
-
-**(a) リポジトリには OSM.jp 由来データを同梱しない**
-
-`geojson/*.geojson` は `.gitignore` で除外されており、本リポジトリの clone / tarball / fork には一切含まれない。したがって**リポジトリの配布物自体は GPL-2.0 で完結**し、CC-BY-SA 2.0 / ODbL の義務は発生しない。義務はあくまで「操作者が手元で fetch した瞬間にその操作者個人の手元のファイルに対して」発生する。
-
-**(b) スタイル + sprite は上流 openmaptiles から直接取得 (§9.1, §1.4)**
-
-配信スタイル + sprite は openmaptiles 公式 (BSD 3-Clause + CC-BY 4.0、share-alike なし) を直接取得したもので、CC-BY-SA 2.0 とは無関係。
-
-**(b) MBTiles は OSM.jp の polygon を「内容として」含まない**
-
-OSM.jp の MVT から抽出した polygon (`geojson/`) は、`buffer_clip.py` → `world_minus_islands.poly` (中間ファイル) → `osmium extract -p` の clip mask として用いられるだけで、出力 `clipped.osm.pbf` および `final.mbtiles` には埋め込まれない。`osmium extract -p` は `.poly` の穴の内側を削除する操作であり、`.poly` 自体の座標を出力にコピーしない。
-
-これは「ステンシルの著作権はスプレーアートに伝播しない」のと同じ位置付け: CC-BY-SA 2.0 のシェアアライク条項は派生著作物 (内容を含むもの・改変したもの) に適用される条項であり、入力パラメータ / clip mask としての利用には及ばない。これは (a)(b) と独立した論点で、仮にデータが同梱されていたとしても MBTiles 側には伝播しない。
-
-### 13.3 配信時のクライアント表示例
+### 12.2 配信時のクライアント表示例
 
 各スタイルごとに、上流 LICENSE.md が指定する credit 例に従う。
 
@@ -1555,45 +1502,38 @@ OSM.jp の MVT から抽出した polygon (`geojson/`) は、`buffer_clip.py` �
 © OpenMapTiles | © OpenStreetMap contributors
 ```
 
-`scripts/patch_style.py` はスタイル ID に応じて適切な attribution 文字列 (リンク付き HTML) を `metadata.attribution` に自動で埋め込む。MapLibre GL JS / `maplibre-gl-leaflet` を使う場合は、これが自動表示されるため手動指定不要。Leaflet 直叩き等の場合は §14.2 の各例を参照。
+`scripts/patch_style.py` はスタイル ID に応じて適切な attribution 文字列 (リンク付き HTML) を `metadata.attribution` に自動で埋め込む。MapLibre GL JS / `maplibre-gl-leaflet` を使う場合は、これが自動表示されるため手動指定不要。Leaflet 直叩き等の場合は §13.2 の各例を参照。
 
 > **license labels (CC-BY, ODbL 等) はクレジットに含めない**: 上流 LICENSE.md の例も含めていない。OSM の `/copyright` ページや MapTiler の copyright ページへのハイパーリンクで法的な参照可能性が確保されるため、credit 文字列自体は最小限で足りる。
 
-> **ベクタータイル本体だけを利用する場合 (style.json を使わない)**: §14.2.2 のように `Leaflet.VectorGrid` 等で `data/openmaptiles/{z}/{x}/{y}.pbf` のみを消費する場合は、style 由来の credit が不要となり `© OpenMapTiles | © OpenStreetMap contributors` のみで足りる (OpenMapTiles スキーマと OSM データの帰属のみ残る)。
+> **ベクタータイル本体だけを利用する場合 (style.json を使わない)**: §13.2.2 のように `Leaflet.VectorGrid` 等で `data/openmaptiles/{z}/{x}/{y}.pbf` のみを消費する場合は、style 由来の credit が不要となり `© OpenMapTiles | © OpenStreetMap contributors` のみで足りる (OpenMapTiles スキーマと OSM データの帰属のみ残る)。
 
-### 13.4 リポジトリ全体のライセンス境界
+### 12.3 リポジトリ全体のライセンス境界
 
 | 場所 | ライセンス | 備考 |
 |---|---|---|
-| **リポジトリ全体 (`scripts/`、`etc/`、`data/`、`web/`、`geojson/README.md`、`geojson/LICENSE`、`tileserver-noborder.md` 等)** | **GPL-2.0** (top-level `LICENSE`) | リポジトリの clone / tarball / fork 配布物は一律 GPL-2.0 で完結 |
-| 操作者が手元で fetch した `$REPO/geojson/{hoppo,takeshima}.geojson` | **CC-BY-SA 2.0 + ODbL** | **本リポジトリには同梱しない** (`.gitignore`)。`geojson/LICENSE` は「fetch されたデータに適用されるライセンス」を説明する informational ファイル |
+| **リポジトリ全体 (`scripts/`、`etc/`、`data/`、`web/`、`tileserver-noborder.md` 等)** | **GPL-2.0** (top-level `LICENSE`) | リポジトリの clone / tarball / fork 配布物は一律 GPL-2.0 で完結 |
 
-### 13.5 補足
-
-本構成のタイル配信ループ (年次 rebuild) は**完全ローカル動作**: OSM.jp サーバへの通信なし。OSM.jp が参照されるのは初回セットアップ時に `scripts/fetch_osmjp.py` を 1 度実行するときのみ (§5)。以降は年単位の手動リフレッシュを除き OSM.jp は不要。
-
-リポジトリ自体は OSM.jp 由来データを 1 ビットも含まない (`.gitignore` で `geojson/*.geojson` を除外)。CC-BY-SA 2.0 / ODbL の share-alike 義務はリポジトリ配布物には発生せず、操作者が手元で fetch した時点でその操作者の手元のファイルにのみ発生する。
-
-### 13.6 本リポジトリの改変スタイルに対する著作権ポリシー
+### 12.4 本リポジトリの改変スタイルに対する著作権ポリシー
 
 **本リポジトリは、`scripts/patch_style.py` によるスタイル改変部分に対して新たな著作権を主張しない**。改変部分は上流と同一のライセンス (BSD 3-Clause for code / CC-BY 4.0 for design) でそのまま頒布されるものとし、本リポジトリの名称・URL・改変者表記の追加クレジットを下流配信地図に求めない。
 
-**結果として、配信地図に表示するクレジット文字列は §13.3 / §14.3 のとおり上流 LICENSE.md の例と完全一致する**。すなわち:
+**結果として、配信地図に表示するクレジット文字列は §12.2 / §13.3 のとおり上流 LICENSE.md の例と完全一致する**。すなわち:
 
 - Toner-en: `© MapTiler | © OpenStreetMap contributors`
 - Basic-en: `© OpenMapTiles | © OpenStreetMap contributors`
 
 「Modified by tileserver-noborder」「Boundary-neutral rendering」等の追加クレジットは**ライセンス上不要**である (任意の付記は妨げない)。
 
-> **背景**: `patch_style.py` の改変はすべて公開された規則による機械的変換 (boundary フィルター追加、admin_level 合流、country ラベル zoom キャップ、フォント置換、sprite/glyphs のローカルパス書き換え等) であり、改変ロジック自体はリポジトリの GPL-2.0 で別途保護される。改変結果の style.json それ自体に新たな著作権主張を重ねる意図はない。これは上流の openmaptiles プロジェクトの credit 例 (§13.3) を尊重し、下流ユーザの帰属表記負担を増やさないためのポリシー判断である。
+> **補足**: `patch_style.py` の改変はすべて公開された規則による機械的変換 (boundary フィルター追加、admin_level 合流、country ラベル zoom キャップ、text-field 書き換え、sprite/glyphs のローカルパス書き換え等) であり、改変ロジック自体はリポジトリの GPL-2.0 で別途保護される。改変結果の style.json それ自体に新たな著作権主張を重ねる意図はない。これは上流の openmaptiles プロジェクトの credit 例 (§12.2) を尊重し、下流ユーザの帰属表記負担を増やさないためのポリシー判断である。
 
 ---
 
-## 14. クライアント埋め込み
+## 13. クライアント埋め込み
 
-本サーバ (`tile.hogehoge.com`) を Web 地図に組み込む際の典型パターンと、各パターンで必要となる帰属表記をまとめる。デモは §10.3 が `MapLibre GL JS` で 1 例を示しているが、本節は実用組み込み (Leaflet ベースのサイト等) を想定したガイドである。
+本サーバ (`tile.hogehoge.com`) を Web 地図に組み込む際の典型パターンと、各パターンで必要となる帰属表記をまとめる。デモは §9.3 が `MapLibre GL JS` で 1 例を示しているが、本節は実用組み込み (Leaflet ベースのサイト等) を想定したガイドである。
 
-### 14.1 推奨パターン: MapLibre GL JS (`metadata.attribution` 自動表示)
+### 13.1 推奨パターン: MapLibre GL JS (`metadata.attribution` 自動表示)
 
 最もシンプルで、**ライセンス義務 (帰属表記) が自動で満たされる**ため第一の選択肢として推奨する。`scripts/patch_style.py` が style.json の `metadata.attribution` に必要文言を埋め込むため、MapLibre GL JS の `AttributionControl` がそれを地図右下に自動表示する。
 
@@ -1614,13 +1554,13 @@ OSM.jp の MVT から抽出した polygon (`geojson/`) は、`buffer_clip.py` �
 
 利点: ベクター描画 (拡大しても綺麗)、スタイル忠実再現、attribution 自動。スタイルを `patch_style.py` で再生成すると attribution も自動追従。
 
-### 14.2 Leaflet からの利用
+### 13.2 Leaflet からの利用
 
 Leaflet は素のままではベクタータイルを描画できない。3 つの選択肢があり、それぞれ前提条件と必要なクレジットが異なる。
 
-#### 14.2.1 ラスタータイル直叩き (`serve_rendered: true`、本書既定)
+#### 13.2.1 ラスタータイル直叩き (`serve_rendered: true`、本書既定)
 
-`L.tileLayer` で PNG タイルを取得する最もシンプルで互換性の高い方式。**ラスター専用クライアント（WordPress「Leaflet Map」プラグイン等、後述）はこの方式のみ対応**。本書既定の `serve_rendered: true`（§9.5）で利用可能（ヘッドレスでは Xvfb が前提、§9.6）。
+`L.tileLayer` で PNG タイルを取得する最もシンプルで互換性の高い方式。**ラスター専用クライアント（WordPress「Leaflet Map」プラグイン等、後述）はこの方式のみ対応**。本書既定の `serve_rendered: true`（§8.5）で利用可能（ヘッドレスでは Xvfb が前提、§8.6）。
 
 > **WordPress「Leaflet Map」プラグイン (bozdoz) で使う場合**: このプラグインは**ラスター XYZ 専用**（`tileurl` / `[leaflet-tilelayer]` の `url` に `{z}/{x}/{y}.png` テンプレートを指定）で、MapLibre GL / `style.json` には対応しない。したがって本サーバの**ラスター XYZ URL** をそのまま指定する:
 >
@@ -1631,7 +1571,7 @@ Leaflet は素のままではベクタータイルを描画できない。3 つ�
 >
 > 例: `[leaflet-map][leaflet-tilelayer url="https://tile.hogehoge.com/styles/maptiler-toner-en/{z}/{x}/{y}.png"][/leaflet-map]`。`serve_rendered: false` だとこの URL は 404 になり使えない。
 
-attribution 文字列はスタイルごとに異なる (§13.3 参照、上流 LICENSE.md の指示に準拠)。
+attribution 文字列はスタイルごとに異なる (§12.2 参照、上流 LICENSE.md の指示に準拠)。
 
 **Toner-en**:
 ```js
@@ -1651,7 +1591,7 @@ L.tileLayer('https://tile.hogehoge.com/styles/maptiler-basic-en/{z}/{x}/{y}.png'
 }).addTo(map);
 ```
 
-#### 14.2.2 ベクタータイル + `Leaflet.VectorGrid` プラグイン
+#### 13.2.2 ベクタータイル + `Leaflet.VectorGrid` プラグイン
 
 style.json を**使わず**、ベクタータイル本体 (`.pbf`) のみを消費して自前のスタイル定義で描画する方式。`vectorTileLayerStyles` を自分で書く必要があるため、本プロジェクトの「Toner-en の見た目を維持」という意図とは外れる。**MapTiler クレジットは不要** (style を使わないため)、`OpenMapTiles` (スキーマ) と `OpenStreetMap contributors` (データ) のみで足りる。
 
@@ -1663,7 +1603,7 @@ L.vectorGrid.protobuf('https://tile.hogehoge.com/data/openmaptiles/{z}/{x}/{y}.p
 }).addTo(map);
 ```
 
-#### 14.2.3 `@maplibre/maplibre-gl-leaflet` プラグイン (Leaflet ベース推奨)
+#### 13.2.3 `@maplibre/maplibre-gl-leaflet` プラグイン (Leaflet ベース推奨)
 
 既存 Leaflet サイトに最小変更でベクタータイル + 改変 Toner-en スタイルを組み込みたい場合の最良の選択。**attribution は MapLibre が style.json から自動取得**するため手動記述不要。
 
@@ -1679,19 +1619,19 @@ L.vectorGrid.protobuf('https://tile.hogehoge.com/data/openmaptiles/{z}/{x}/{y}.p
 </script>
 ```
 
-### 14.3 必須クレジット早見表
+### 13.3 必須クレジット早見表
 
 各上流 LICENSE.md の credit 例に基づく必要最小限のクレジット (license labels (ODbL, CC-BY 等) はクレジット文字列に含めない)。
 
 | パターン | スタイル | 表示する credit | 記述方法 |
 |---|---|---|---|
-| §14.1 MapLibre GL JS | Toner-en | `© MapTiler ` + `© OpenStreetMap contributors` | **自動** (style.json `metadata.attribution`) |
-| §14.1 MapLibre GL JS | Basic-en | `© OpenMapTiles ` + `© OpenStreetMap contributors` | **自動** (同上) |
-| §14.2.1 Leaflet ラスター | Toner-en | `© MapTiler ` + `© OpenStreetMap contributors` | **手動** (§14.2.1 のスニペット) |
-| §14.2.1 Leaflet ラスター | Basic-en | `© OpenMapTiles ` + `© OpenStreetMap contributors` | **手動** (同) |
-| §14.2.2 Leaflet VectorGrid | (style 不使用) | `© OpenMapTiles ` + `© OpenStreetMap contributors` | **手動** (style 不使用のため MapTiler 不要) |
-| §14.2.3 maplibre-gl-leaflet | Toner-en | `© MapTiler ` + `© OpenStreetMap contributors` | **自動** |
-| §14.2.3 maplibre-gl-leaflet | Basic-en | `© OpenMapTiles ` + `© OpenStreetMap contributors` | **自動** |
+| §13.1 MapLibre GL JS | Toner-en | `© MapTiler ` + `© OpenStreetMap contributors` | **自動** (style.json `metadata.attribution`) |
+| §13.1 MapLibre GL JS | Basic-en | `© OpenMapTiles ` + `© OpenStreetMap contributors` | **自動** (同上) |
+| §13.2.1 Leaflet ラスター | Toner-en | `© MapTiler ` + `© OpenStreetMap contributors` | **手動** (§13.2.1 のスニペット) |
+| §13.2.1 Leaflet ラスター | Basic-en | `© OpenMapTiles ` + `© OpenStreetMap contributors` | **手動** (同) |
+| §13.2.2 Leaflet VectorGrid | (style 不使用) | `© OpenMapTiles ` + `© OpenStreetMap contributors` | **手動** (style 不使用のため MapTiler 不要) |
+| §13.2.3 maplibre-gl-leaflet | Toner-en | `© MapTiler ` + `© OpenStreetMap contributors` | **自動** |
+| §13.2.3 maplibre-gl-leaflet | Basic-en | `© OpenMapTiles ` + `© OpenStreetMap contributors` | **自動** |
 
 > **Toner で OpenMapTiles / Stamen が不要な根拠**: 上流 [maptiler-toner-gl-style/LICENSE.md](https://github.com/openmaptiles/maptiler-toner-gl-style/blob/master/LICENSE.md) は OpenMapTiles credit 要件に対し "An exception has been granted: required copyright on this style is (C) MapTiler" と明記。`© MapTiler` のみで両方 (OpenMapTiles 要件 + design CC-BY 4.0) を満たす。Stamen Design (ISC) は「design 由来」の表示であって credit 義務ではない。
 
@@ -1699,34 +1639,18 @@ L.vectorGrid.protobuf('https://tile.hogehoge.com/data/openmaptiles/{z}/{x}/{y}.p
 
 > **表示要件 (各ライセンス共通)**: 帰属表記は地図閲覧者が**画面遷移・拡大縮小なしに視認できる**位置に配置する。Leaflet の既定 `attributionControl` (右下) で要件を満たす。隠しメニューや About ページ専用への配置は不可 (ODbL 4.2 / CC-BY 4.0 3a の趣旨)。
 
-> **HTTPS 配信前提**: 上記すべての例は本サーバが HTTPS (`tile.hogehoge.com`) で配信されている前提。HTTP の場合は Mixed Content ブロックで動かない。配信される style.json 内の `sprite` / `glyphs` は tileserver-gl が nginx 経由のリクエスト (`Host` / `X-Forwarded-Proto`) から絶対 `https://` URL に展開するため (§9.3 項目 9 / §9.7.8)、サードパーティは style.json の URL をそのまま指定すれば追加設定なしに動作する。
+> **HTTPS 配信前提**: 上記すべての例は本サーバが HTTPS (`tile.hogehoge.com`) で配信されている前提。HTTP の場合は Mixed Content ブロックで動かない。配信される style.json 内の `sprite` / `glyphs` は tileserver-gl が nginx 経由のリクエスト (`Host` / `X-Forwarded-Proto`) から絶対 `https://` URL に展開するため (§8.3 項目 9 / §8.7.8)、サードパーティは style.json の URL をそのまま指定すれば追加設定なしに動作する。
 
-> **BSD 3-Clause (code) の取扱い**: 配信地図 UI には不要。リポジトリ内に上流 LICENSE.md を保持しておけば足りる (本リポジトリ自体には現在同梱していないが、`styles/<id>/LICENSE.md` として配置するか、§14 から URL リンクで参照する運用で問題なし)。
+> **BSD 3-Clause (code) の取扱い**: 配信地図 UI には不要。リポジトリ内に上流 LICENSE.md を保持しておけば足りる (本リポジトリ自体には現在同梱していないが、`styles/<id>/LICENSE.md` として配置するか、§13 から URL リンクで参照する運用で問題なし)。
 
 > **編集姿勢の表記は任意**: 本プロジェクトは国境中立化を行うが、これはライセンス要件ではなく仕様。クレジット欄に「Boundary-neutral rendering」等を併記するかは任意。
 
-### 14.4 どのパターンを選ぶか
+### 13.4 どのパターンを選ぶか
 
 | 状況 | 推奨パターン |
 |---|---|
-| 新規サイト、可能なら MapLibre GL JS を直接使える | **§14.1** (MapLibre GL JS 単体) |
-| 既存 Leaflet サイトに後付け、見た目をスタイル通りに維持したい | **§14.2.3** (maplibre-gl-leaflet) |
-| ラスター専用クライアント (WordPress「Leaflet Map」プラグイン等)、または素の `L.tileLayer` で十分 | **§14.2.1** (raster XYZ。`serve_rendered: true` は本書既定) |
-| Leaflet で完全に独自スタイル設計したい | **§14.2.2** (VectorGrid) |
+| 新規サイト、可能なら MapLibre GL JS を直接使える | **§13.1** (MapLibre GL JS 単体) |
+| 既存 Leaflet サイトに後付け、見た目をスタイル通りに維持したい | **§13.2.3** (maplibre-gl-leaflet) |
+| ラスター専用クライアント (WordPress「Leaflet Map」プラグイン等)、または素の `L.tileLayer` で十分 | **§13.2.1** (raster XYZ。`serve_rendered: true` は本書既定) |
+| Leaflet で完全に独自スタイル設計したい | **§13.2.2** (VectorGrid) |
 
----
-
-## 付録: 前版 (合成方式) からの主な変更点
-
-| 項目 | v1 (合成方式) | v3 (本書) |
-|---|---|---|
-| OSM.jp MVT の用途 | 英語化して出力 MBTiles に統合 | **バッファ計算のジオメトリ取得のみ** |
-| 翻訳スクリプト | 必須 | **削除** |
-| 島嶼 MBTiles ビルド | 必須 (tippecanoe / Planetiler YAML) | **削除** |
-| tile-join 結合 | 必須 | **削除** |
-| 最終 MBTiles 数 | 基盤 + 島嶼 = 2 個 → 結合 | **1 個 (Planetiler 単体出力)** |
-| 使用スタイル | カスタム (独自 island レイヤー) | **Toner-en 改変版** |
-| 海上国境線の非表示 | 白塗りオーバレイ | **黒-on-黒の自然非表示** (Toner-en 仕様) |
-| 日本語→英語表記 | 翻訳辞書で明示 | **`name:en` 優先 (無ければ `name:latin`) の自動選択** |
-| OSM.jp へのランタイム依存 | 無し | **無し (本書の主眼)** |
-| 手順のステップ数 | 10+ | **6 + 配信** |

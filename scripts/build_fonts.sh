@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Build the eight PBF font stacks required by the patched Maptiler Basic / Toner
-# styles (see tileserver-noborder.md §9.2):
+# styles (see tileserver-noborder.md §8.2):
 #
 #   - Noto Sans Regular / Bold / Italic / Bold Italic
 #   - Nunito Regular / Bold / Semi Bold / Extra Bold
@@ -9,7 +9,7 @@
 # text-font stops, and server-side raster rendering (serve_rendered: true)
 # 500s a tile if any referenced stack is missing.
 #
-# The patched styles render only "{name:latin}", so no glyphs beyond Latin +
+# The patched styles render only name:en / name:latin, so no glyphs beyond Latin +
 # Greek + Cyrillic are needed. We pull three variable TTFs from google/fonts,
 # instance the exact weights with fontTools.varLib.instancer, and feed the
 # eight static TTFs to openmaptiles/fonts' generate.js to emit PBF stacks.

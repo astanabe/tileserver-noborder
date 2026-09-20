@@ -1,12 +1,13 @@
 #!/usr/bin/env python3
-"""Inject a sea-color mask layer over the buffered island region.
+"""Inject a sea-color mask layer over the disputed-island region.
 
-After the buffer-erase step in §1.3, islands appear as background-colored
-silhouettes in the sea. This script overlays a fill layer in the buffer
-area painted in the same color as `water`, making islands visually merge
-with the sea. Idempotent: an existing `jp-sea-mask` layer is replaced.
+With the label stripping of §1.3, islands render as background-colored land
+with unlabeled features. This script overlays a fill layer over the region
+(the --debug GeoJSON of buffer_clip.py) painted in the same color as `water`,
+making islands visually merge with the sea. Idempotent: an existing
+`jp-sea-mask` layer is replaced.
 
-See tileserver-noborder.md §12.1.
+See tileserver-noborder.md §11.1.
 """
 import argparse, json, pathlib
 

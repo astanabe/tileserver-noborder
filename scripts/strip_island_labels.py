@@ -5,12 +5,12 @@ Reads OPL (osmium's one-object-per-line text format) on stdin and writes OPL on
 stdout, removing ONLY the tags that render as on-map *text* — names, route refs,
 and house numbers — while leaving every object and all of its geometry intact.
 
-Used by scripts/rebuild.sh on the small island-buffer extract (Northern
-Territories / Takeshima): the islands keep their rivers, terrain, roads and
-buildings, but render with no labels at all (see tileserver-noborder.md §1.3 /
-§7.2). The caller has already spatially limited the input to the island buffer
-via `osmium extract`, so this strips unconditionally — no per-object geometry
-test is needed.
+Used by scripts/rebuild.sh on the small disputed-island extract (Northern
+Territories / Takeshima / Senkaku): the islands keep their rivers, terrain,
+roads and buildings, but render with no labels at all (see
+tileserver-noborder.md §1.3 / §6.2). The caller has already spatially limited
+the input to the island region via `osmium extract`, so this strips
+unconditionally — no per-object geometry test is needed.
 
 OPL layout: space-separated fields; the tags field is the single field that
 begins with an uppercase 'T', holding "key=val,key=val,...". OPL %-encodes any
