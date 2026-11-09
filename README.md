@@ -1,6 +1,6 @@
 # tileserver-noborder
 
-Self-hosted, neutrally-rendered MapLibre tile server (vector **and** raster) for Ubuntu 24.04 / 26.04. Its editorial stance renders disputed land borders identically to sub-national administrative boundaries, hides every over-water boundary line, and renders disputed islands (Northern Territories, Takeshima, Senkaku) with their geography but **no text labels**.
+Self-hosted, neutrally-rendered MapLibre tile server (vector **and** raster) for Ubuntu 24.04. Its editorial stance renders disputed land borders identically to sub-national administrative boundaries, hides every over-water boundary line, and renders disputed islands (Northern Territories, Takeshima, Senkaku) with their geography but **no text labels**.
 
 The full build & operations spec is in **[`tileserver-noborder.md`](./tileserver-noborder.md)** (in Japanese). This README only summarizes what the repo contains.
 
@@ -55,6 +55,10 @@ Style + sprite come from the upstream `openmaptiles/maptiler-{basic,toner}-gl-st
 ## Embedding the served map
 
 Snippets for MapLibre GL JS, Leaflet (raster XYZ, VectorGrid, `maplibre-gl-leaflet`) and the WordPress Leaflet Map plugin — with the per-pattern attribution requirements — are in `tileserver-noborder.md` §13.
+
+## TODO
+
+- **Ubuntu 26.04 support** — blocked on `@maplibre/maplibre-gl-native`. Its prebuilt `mbgl.node` (used by tileserver-gl for raster rendering) links `libicuuc` / `libicui18n` / `libicudata.so.74` (Ubuntu 24.04's ICU), while Ubuntu 26.04 ships libicu78, so the binary cannot load there. As of `node-v6.5.0-pre.1` (which adds Node 26) the prebuilt still links libicu74; until a release built against a newer ICU is published, the only option on 26.04 is to compile maplibre-native from source. Once that is resolved, the remaining 26.04 items to verify are: sudo-rs handling of `etc/sudoers.d/tileserver-rebuild`, the `fontnik` native build in `scripts/build_fonts.sh` and the `canvas` source rebuild with the newer Node / GCC, Python venv wheels (`shapely`, `pyproj`, `fonttools`), Mesa package names for Xvfb rendering, and nginx `http2 on;` syntax.
 
 ## License
 

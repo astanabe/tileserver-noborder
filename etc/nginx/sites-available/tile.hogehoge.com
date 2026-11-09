@@ -29,11 +29,8 @@ server {
 server {
     # HTTP/2 is enabled via the listen-line `http2` option rather than the
     # standalone `http2 on;` directive: the latter only exists in nginx >= 1.25.1,
-    # while Ubuntu 24.04 ships nginx 1.24.0. The listen-line form works on 1.24.0
-    # and still functions on newer nginx (with a deprecation warning).
-    #   Ubuntu 24.04 (nginx 1.24): keep as is -- `http2 on;` is unknown there.
-    #   Ubuntu 26.04 (nginx >= 1.26): optionally convert to `http2 on;` to
-    #   silence the warning; see tileserver-noborder.md §8.7.5 [26.04].
+    # while Ubuntu 24.04 ships nginx 1.24.0, where `http2 on;` is an unknown
+    # directive. See tileserver-noborder.md §8.7.5.
     listen 443 ssl http2;
     listen [::]:443 ssl http2;
     server_name tile.hogehoge.com;

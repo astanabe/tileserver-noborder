@@ -1,12 +1,12 @@
 # 日本政府見解に準拠した自前ベクタータイルサーバ構築手順
 
-OpenMapTiles の **Maptiler Toner / Maptiler Basic スタイル**を境界線中立化して配信する自前タイルサーバ(**ベクター + ラスター**)を **Ubuntu Server 24.04 LTS または 26.04 LTS** に構築する手順。係争地の陸上境界は行政区画線と同一描画、海上境界線は非表示、北方領土・竹島・尖閣は地物を残しつつ文字情報を除去する。
+OpenMapTiles の **Maptiler Toner / Maptiler Basic スタイル**を境界線中立化して配信する自前タイルサーバ(**ベクター + ラスター**)を **Ubuntu Server 24.04 LTS** に構築する手順。係争地の陸上境界は行政区画線と同一描画、海上境界線は非表示、北方領土・竹島・尖閣は地物を残しつつ文字情報を除去する。
 
 **前提条件:**
 
 | 項目 | 値 |
 |---|---|
-| OS | Ubuntu Server 24.04 LTS (検証済) または 26.04 LTS |
+| OS | Ubuntu Server 24.04 LTS |
 | ログインユーザ | `foobar` (sudo 権限あり) |
 | ビルド作業ディレクトリ | `/work/foobar/planetiler` |
 | tileserver-gl データディレクトリ | `/home/foobar/tileserver-gl/data` |
@@ -18,16 +18,7 @@ OpenMapTiles の **Maptiler Toner / Maptiler Basic スタイル**を境界線中
 | リバースプロキシ | nginx (必須) |
 | SSL 証明書 | Let's Encrypt / apt の certbot + `python3-certbot-nginx` |
 
-> **OS バージョンについて**: 本書は Ubuntu Server **24.04.4 LTS** 上で全手順を検証した。**26.04 LTS** でもリポジトリ内のスクリプト・設定テンプレート・systemd / sudoers / certbot フックは変更なしで使えるが、OS 同梱パッケージの版数差により**手順の一部が分岐する**。分岐する箇所には本文中に `**[24.04]**` / `**[26.04]**` の見出しを付けてある。一覧:
->
-> | 箇所 | 24.04 | 26.04 |
-> |---|---|---|
-> | §3 Node.js の導入元 | NodeSource `setup_22.x` (Node 20 は 2026-04 に EOL のため 22 を採用) | 同左。26.04 の標準リポジトリの `nodejs` が tileserver-gl の要件 (`node 20 \|\| 22 \|\| 24`) を満たすならそちらでも可 |
-> | §3 `canvas` のソース再ビルド | 必須 (システム libpng 1.6.43 ≠ prebuild 同梱 1.6.37) | 同じく必須 (システム libpng はさらに新しく、ミスマッチは解消しない)。venv の Python は 3.12 ではなく 26.04 標準の版になるが手順は同一 |
-> | §8.6 Mesa ソフト GL のパッケージ | `xvfb libgl1-mesa-dri` | `xvfb` + `libgl1-mesa-dri` が無い/transitional なら `libglx-mesa0 mesa-libgallium` を明示 |
-> | §8.7.5 nginx の HTTP/2 指定 | nginx 1.24.0 → `listen 443 ssl http2;` (テンプレート既定) | nginx 1.26 以降 → `http2 on;` に変換 (変換しなくても deprecated 警告が出るだけで動作する) |
->
-> 上記以外 (apt パッケージ名、osmium-tool、OpenJDK 21、certbot、Python スクリプト、rebuild.sh) は両バージョンで同一。
+> **OS バージョンについて**: 本書は Ubuntu Server **24.04 LTS** を前提とし、24.04 上で全手順を検証した。26.04 LTS は未対応 (`README.md` の TODO 参照)。
 
 > **ディレクトリ分離の意図**: `/work/foobar/planetiler` はビルド作業専用 (PBF、tmp、中間 MBTiles)。配信系は一切 `/work` を参照せず、`/home/foobar/tileserver-gl/data` と `/home/foobar/http/tile.hogehoge.com` のみで完結する。リビルド時はビルド成果物 (MBTiles) をクロスファイルシステム対応のアトミック置換で配信側に反映する (§10 参照)。
 
@@ -237,7 +228,7 @@ fonts/  (共通, 8 書体)
 
 | 種別 | 項目 | サイズ |
 |---|---|---:|
-| 恒久 | OS (Ubuntu 24.04 / 26.04) + 依存パッケージ | ~8 GB |
+| 恒久 | OS (Ubuntu 24.04) + 依存パッケージ | ~8 GB |
 | 恒久 | Planetiler jar / tileserver-gl (`node_modules`) / Python venv | ~1 GB |
 | 恒久 | Toner-en 資産 (style, sprite, fonts) | ~100 MB |
 | サイクル毎 | ソース PBF (`planet.osm.pbf`) | ~85 GB |
@@ -354,11 +345,8 @@ sudo apt install -y \
     libopengl0           # tileserver-gl (@maplibre/maplibre-gl-native) の実行時に必要
 
 # Node.js LTS (tileserver-gl 5.x requires node 20 || 22 || 24; Node 20 reached
-# EOL in 2026-04, so use 22 or newer)
-#   [24.04] The archive nodejs (18.x) is too old -> NodeSource is required.
-#   [26.04] NodeSource works as well. Alternatively, the archive nodejs may be
-#           used if `apt-cache policy nodejs` shows a version >= 22 (skip the
-#           curl line and just `sudo apt install -y nodejs npm`).
+# EOL in 2026-04, so use 22 or newer). The Ubuntu 24.04 archive nodejs (18.x)
+# is too old, so install from NodeSource.
 curl -fsSL https://deb.nodesource.com/setup_22.x | sudo -E bash -
 sudo apt install -y nodejs
 node --version   # -> v22.x (or newer)
@@ -387,12 +375,11 @@ npm install tileserver-gl
 
 # The canvas prebuild binary bundles its own libpng 1.6.37, which mismatches
 # the system libpng and makes tileserver-gl abort at startup with
-# "libpng version mismatch". Rebuild from source so it links the system libpng.
-#   [24.04] system libpng 1.6.43 -> mismatch, rebuild required.
-#   [26.04] system libpng is newer still -> mismatch persists, rebuild required.
-#           (check with: dpkg -l 'libpng16*' | grep ^ii)
+# "libpng version mismatch" (Ubuntu 24.04 ships libpng 1.6.43; check with
+# `dpkg -l 'libpng16*' | grep ^ii`). Rebuild from source so it links the
+# system libpng.
 # $REPO/venv is activated above, so node-gyp would pick up the venv Python
-# (3.12 on 24.04, newer on 26.04 -- both lack distutils) and fail. Point it
+# (3.12, which lacks distutils) and fail. Point it
 # at the system python3 explicitly instead.
 env -u VIRTUAL_ENV PATH=/usr/bin:/bin:/usr/local/bin \
     npm rebuild canvas --build-from-source --python=/usr/bin/python3
@@ -943,23 +930,13 @@ tileserver-gl はループバック専用バインドとし、外部公開は後
 >
 > **Xvfb 前提 (`serve_rendered: true` のため)**: 本ユニットの `ExecStart` は `serve_rendered: true`（§8.5）のサーバ側ラスター描画に必要な X ディスプレイを与えるため、tileserver-gl を `xvfb-run` で起動する（`Environment=LIBGL_ALWAYS_SOFTWARE=1` で Mesa ソフトウェア描画を強制）。入れずに `serve_rendered: true` のまま起動すると `Failed to open X display` で異常終了する。
 >
-> **[24.04]**
->
 > ```bash
 > sudo apt install -y xvfb libgl1-mesa-dri
 > ```
 >
-> **[26.04]** Mesa のパッケージ構成が変わり `libgl1-mesa-dri` が存在しない、または中身の無い transitional パッケージになっている可能性がある。実際にロードされるライブラリを直接指定する:
->
-> ```bash
-> sudo apt install -y xvfb libglx-mesa0 mesa-libgallium
-> # `libgl1-mesa-dri` が残っていれば追加しても害はない:
-> apt-cache policy libgl1-mesa-dri | head -3
-> ```
->
 > - **`xvfb`** が必須（仮想 X ディスプレイ。依存で Mesa の GL スタックも入る）。
-> - 描画が実際にロードするソフトウェア GL は `libGLX_mesa.so`（`libglx-mesa0`）+ `libgallium*.so`（`mesa-libgallium`）で、通常は GL スタックと共に導入済み。24.04 では最小構成のサーバで欠ける場合に備え、慣用的に **`libgl1-mesa-dri`** を併せて入れておくと確実（このパッケージ自体の DRI モジュールは GLX パスでは未ロードだが、Mesa ソフト GL 一式を揃える保険）。26.04 では上記 2 パッケージを直接指定することで同じ効果を得る。
-> - どちらの版でも、導入後に `ldconfig -p | grep -E 'libGLX_mesa|libgallium'` で両ライブラリが見えることを確認しておく。
+> - 描画が実際にロードするソフトウェア GL は `libGLX_mesa.so`（`libglx-mesa0`）+ `libgallium*.so`（`mesa-libgallium`）で、通常は GL スタックと共に導入済み。最小構成のサーバで欠ける場合に備え、慣用的に **`libgl1-mesa-dri`** を併せて入れておくと確実（このパッケージ自体の DRI モジュールは GLX パスでは未ロードだが、Mesa ソフト GL 一式を揃える保険）。
+> - 導入後に `ldconfig -p | grep -E 'libGLX_mesa|libgallium'` で両ライブラリが見えることを確認しておく。
 > - `mesa-utils`（`glxinfo`/`glxgears` の診断用）と `bumblebee`（NVIDIA Optimus 用）は **不要**。
 >
 > ラスターが不要なら `serve_rendered: false`（§8.5）にし、ユニットの `xvfb-run …` を素の `ExecStart=…/tileserver-gl …` に戻してもよい（その場合 Xvfb 不要）。
@@ -1093,18 +1070,11 @@ sudo certbot renew --dry-run
 
 certbot 実行後、render 出力の `staging/etc/nginx/sites-available/$DOMAIN` で同名ファイルを上書きする。この設定には HTTP→HTTPS リダイレクト、proxy_cache (`/var/cache/nginx/tiles`、20 GB / 7 日)、CORS、`/demo.html` の nginx 直接配信 (§9.3) がすべて含まれる。
 
-テンプレートは HTTP/2 を `listen 443 ssl http2;` (listen 行オプション) で有効化している。これは両 OS で動作するが、nginx の版数で扱いが異なる:
-
-- **[24.04]** nginx 1.24.0。単独ディレクティブ `http2 on;` は 1.25.1 以降にしか無いため、listen 行オプション**のみが使える**。テンプレートのまま配置する。
-- **[26.04]** nginx 1.26 以降。listen 行オプションは deprecated となり `nginx -t` / 起動時に `the "listen ... http2" directive is deprecated, use the "http2" directive instead` の**警告**が出る (動作はする)。警告を消すには、配置前に staging 側のファイルを `http2 on;` 形式へ変換する (下記ブロック内の `[26.04]` 2 行)。`render-configs.sh` を再実行すると staging は listen 行形式に戻るので、再配置のたびに変換も再実行すること (変換は冪等)。
+テンプレートは HTTP/2 を `listen 443 ssl http2;` (listen 行オプション) で有効化している。Ubuntu 24.04 の nginx 1.24.0 には単独ディレクティブ `http2 on;` が無い (1.25.1 以降) ため、listen 行オプション**のみが使える**。テンプレートのまま配置する。
 
 ```bash
 . "$REPO/deploy.env"   # $DOMAIN, $USER_NAME を読み込む
 F="$REPO/staging/etc/nginx/sites-available/$DOMAIN"
-
-# [26.04] のみ: listen 行の http2 オプションを `http2 on;` ディレクティブに変換
-sed -i -E 's/^(\s*listen .*) http2;$/\1;/' "$F"
-grep -qE '^\s*http2 on;' "$F" || sed -i -E '0,/^\s*listen \[::\]:443 ssl;$/s//&\n    http2 on;/' "$F"
 
 sudo install -m 0644 -o root -g root "$F" "/etc/nginx/sites-available/$DOMAIN"
 
@@ -1440,10 +1410,9 @@ sudo systemctl enable --now tileserver-rebuild.timer
 | certbot 自動更新が失敗する | `sudo journalctl -u certbot.timer -e` と `sudo certbot renew --dry-run` を確認。更新成功時に nginx reload が走らない場合は §8.7.7 のフックを確認 |
 | リビルド後も古いタイルが返る | nginx `proxy_cache` の残留。§10 の rebuild.sh (6)(7) で `/var/cache/nginx/tiles` が削除されているか確認 |
 | 502 Bad Gateway | tileserver-gl が `127.0.0.1:8080` で待ち受けていない。`ss -ltnp | grep 8080` と `journalctl -u tileserver-gl -e` を確認 |
-| tileserver-gl が起動直後にクラッシュ (`Failed to open X display` / core-dump) | `serve_rendered: true` のサーバ側描画に X ディスプレイが無い。`xvfb` + Mesa ソフト GL (24.04: `libgl1-mesa-dri` / 26.04: `libglx-mesa0 mesa-libgallium`) を入れ、systemd ユニットが `xvfb-run …` で起動しているか確認 (§8.6)。ラスター不要なら `serve_rendered: false` に戻す (§8.5) |
-| tileserver-gl 起動時に `libpng warning: Application built with libpng-1.6.37 but running with 1.6.xx` → abort | `canvas` が prebuild バイナリのまま (24.04 / 26.04 共通)。§3 の `npm rebuild canvas --build-from-source` を再実行し、`.npmrc` に `build_from_source=true` を置いて再発を防ぐ |
-| `nginx -t` で `the "listen ... http2" directive is deprecated` 警告 | **[26.04]** nginx 1.26 以降でテンプレートの listen 行形式を使っている。動作に支障は無い。消したければ §8.7.5 の `[26.04]` 変換 (`http2 on;` 化) を staging に適用して再配置 |
-| `nginx -t` で `unknown directive "http2"` エラー | **[24.04]** nginx 1.24.0 に `http2 on;` は無い。§8.7.5 の `[26.04]` 変換を 24.04 で適用してしまっている。`render-configs.sh` で staging を再生成し、変換せずに配置する |
+| tileserver-gl が起動直後にクラッシュ (`Failed to open X display` / core-dump) | `serve_rendered: true` のサーバ側描画に X ディスプレイが無い。`xvfb` + Mesa ソフト GL (`libgl1-mesa-dri`) を入れ、systemd ユニットが `xvfb-run …` で起動しているか確認 (§8.6)。ラスター不要なら `serve_rendered: false` に戻す (§8.5) |
+| tileserver-gl 起動時に `libpng warning: Application built with libpng-1.6.37 but running with 1.6.xx` → abort | `canvas` が prebuild バイナリのまま。§3 の `npm rebuild canvas --build-from-source` を再実行し、`.npmrc` に `build_from_source=true` を置いて再発を防ぐ |
+| `nginx -t` で `unknown directive "http2"` エラー | nginx 1.24.0 に `http2 on;` は無い。配置した設定が `http2 on;` 形式に書き換えられている。`render-configs.sh` で staging を再生成し、テンプレートの listen 行形式 (`listen 443 ssl http2;`) のまま配置する (§8.7.5) |
 | ラスター PNG だけ 500 (ベクター/style.json は正常)、ログに `Failed to load glyph range ... Invalid range` | ①参照フォント不足: §8.2 の 8 書体すべてが `data/fonts/` にあるか確認 (特に `Nunito Regular` / `Nunito Bold`)。`build_fonts.sh` を再実行し tileserver-gl 再起動。②glyphs パス不正: style.json の `glyphs` が `{fontstack}/{range}.pbf` (先頭 `fonts/` 無し) か確認。`fonts/` が付くと描画で二重 `fonts/` になり 500 (§8.3 項目 10)。`patch_style.py` 再実行 |
 | ラスター XYZ URL が 404 (`/styles/{id}/{z}/{x}/{y}.png`) | `serve_rendered: false` のまま。§8.5 で `true` にし、Xvfb を整えて (§8.6) 再起動 |
 | nginx 起動に失敗 (Permission denied) | §8.7.1a の `user foobar foobar;` 変更後に `/var/log/nginx` のオーナーが foobar になっていない。`sudo chown -R foobar:foobar /var/log/nginx` |
